@@ -134,8 +134,9 @@ final class ExportEngine {
             int w=Integer.parseInt(m.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
             int h=Integer.parseInt(m.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
             String rotation=m.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
-            if("90".equals(rotation)||"270".equals(rotation))return new int[]{h,w};
-            return new int[]{Math.max(2,w),Math.max(2,h)};
+            if("90".equals(rotation)||"270".equals(rotation)){int temp=w;w=h;h=temp;}
+            return (c.rotationDegrees==90||c.rotationDegrees==270)
+                ?new int[]{Math.max(2,h),Math.max(2,w)}:new int[]{Math.max(2,w),Math.max(2,h)};
         }catch(Exception e){return new int[]{1920,1080};}finally{try{m.release();}catch(Exception ignored){}}
     }
 
@@ -195,7 +196,7 @@ final class ExportEngine {
             String video="["+videoInputs.get(i)+":v]";
             String audio="["+audioInputs.get(i)+":a]";
             filter.append(video)
-                .append(c.image?orientationFilter(c.rotationDegrees):"")
+                .append(orientationFilter(c.rotationDegrees))
                 .append("scale=").append(w).append(":").append(h)
                 .append(":force_original_aspect_ratio=decrease:flags=lanczos")
                 .append(",pad=").append(w).append(":").append(h)

@@ -133,14 +133,14 @@ final class ExportEngine {
         int frameRate=p.fps;
         List<String> args=new ArrayList<>();
         args.add("-hide_banner");args.add("-y");
-        List<Integer> videoInputs=new ArrayList<>(),audioInputs=new ArrayList<>();
+        List<Integer> videoInputs=new ArrayList<>(),audioInputs=new ArrayList<>(),layerAudioInputs=new ArrayList<>(),stickerInputs=new ArrayList<>();
         int idx=0;
         for(Project.Clip c:p.clips) {
             if(!new File(c.path).exists())throw new Exception("Datei nicht gefunden: "+c.name);
             if(c.image){
                 add(args,"-loop","1","-framerate",Integer.toString(frameRate),"-t",n(c.length()),"-i",c.path);
             }else{
-                add(args,"-ss",n(c.start),"-t",n(c.length()),"-i",c.path);
+                add(args,"-ss",n(c.start),"-t",n(c.end-c.start),"-i",c.path);
             }
             videoInputs.add(idx);
             if(!c.image && c.audio)audioInputs.add(idx);
@@ -155,6 +155,11 @@ final class ExportEngine {
             File f=new File(p.musicPath);
             if(f.exists()){musicIndex=idx; add(args,"-stream_loop","-1","-i",f.getAbsolutePath());idx++;}
         }
+        for(Project.AudioTrack track:p.audioTracks){
+            File audioFile=new File(track.path);
+            if(audioFile.isFile()){layerAudioInputs.add(idx);add(args,"-i",audioFile.getAbsolutePath());idx++;}
+            else layerAudioInputs.add(-1);
+        }
         int baseOverlayIndex=idx;
         List<File> overlays=new ArrayList<>();
         for(int i=0;i<p.captions.size();i++){
@@ -164,6 +169,12 @@ final class ExportEngine {
             makeCaptionBitmap(caption,w,h,png);
             overlays.add(png);
             add(args,"-loop","1","-framerate",Integer.toString(frameRate),"-i",png.getAbsolutePath());
+            idx++;
+        }
+        for(Project.Sticker sticker:p.stickers) {
+            if(!new File(sticker.path).isFile()){stickerInputs.add(-1);continue;}
+            stickerInputs.add(idx);
+            add(args,"-loop","1","-framerate",Integer.toString(frameRate),"-i",sticker.path);
             idx++;
         }
         StringBuilder filter=new StringBuilder();
@@ -176,12 +187,20 @@ final class ExportEngine {
                 .append(":force_original_aspect_ratio=decrease:flags=lanczos")
                 .append(",pad=").append(w).append(":").append(h)
                 .append(":(ow-iw)/2:(oh-ih)/2:color=black")
-                .append(",setsar=1,format=yuv420p")
+                .append(",setsar=1")
+                .append(c.image && c.kenBurns ? ",zoompan=z='min(zoom+0.0015,1.14)':d=1:s="+w+"x"+h+":fps="+frameRate : "")
+                .append(",eq=brightness=").append(n(c.brightness))
+                .append(":contrast=").append(n(c.contrast))
+                .append(":saturation=").append(n(c.saturation))
+                .append(",format=yuv420p")
+                .append(",setpts=(PTS-STARTPTS)/").append(n(c.image?1:c.speed))
                 .append(",trim=duration=").append(n(c.length()))
-                .append(",setpts=PTS-STARTPTS,fps=").append(frameRate).append(",settb=AVTB[v").append(i).append("];\n");
+                .append(",fps=").append(frameRate).append(",settb=AVTB[v").append(i).append("];\n");
             filter.append(audio)
                 .append("aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=")
-                .append(n(c.length())).append(",asetpts=PTS-STARTPTS[a").append(i).append("];\n");
+                .append(n(c.image?c.length():c.end-c.start)).append(",asetpts=PTS-STARTPTS")
+                .append(!c.image && c.speed!=1 ? speedAudio(c.speed) : "")
+                .append(",atrim=duration=").append(n(c.length())).append("[a").append(i).append("];\n");
         }
         String v="v0",a="a0";
         double joined=p.clips.get(0).length();
@@ -221,6 +240,20 @@ final class ExportEngine {
                 .append(")'[").append(outV).append("];\n");
             v=outV;overlayIdx++;
         }
+        int stickerNum=0;
+        for(int j=0;j<p.stickers.size();j++){
+            Project.Sticker sticker=p.stickers.get(j);
+            int input=stickerInputs.get(j);
+            if(input<0||sticker.end<=sticker.start)continue;
+            String sk="sticker"+stickerNum,outV="stickerComposite"+stickerNum;
+            filter.append("[").append(input).append(":v]format=rgba,scale=")
+                .append(Math.max(8,even(w*sticker.scale))).append(":-1[").append(sk).append("];\n");
+            filter.append("[").append(v).append("][").append(sk).append("]overlay=x=")
+                .append(n(sticker.x)).append("*(W-w):y=").append(n(sticker.y))
+                .append("*(H-h):enable='between(t,").append(n(sticker.start)).append(",")
+                .append(n(sticker.end)).append(")'[").append(outV).append("];\n");
+            v=outV;stickerNum++;
+        }
         String aout="audiofinal";
         if(musicIndex>=0) {
             filter.append("[").append(a).append("]volume=").append(n(p.originalVolume)).append("[originalvol];\n");
@@ -232,11 +265,37 @@ final class ExportEngine {
         }else{
             filter.append("[").append(a).append("]volume=").append(n(p.originalVolume)).append("[").append(aout).append("]");
         }
+        for(int k=0;k<p.audioTracks.size();k++) {
+            Project.AudioTrack t=p.audioTracks.get(k);
+            int src=layerAudioInputs.get(k);
+            if(src<0||t.start>=joined)continue;
+            if(aout.equals("audiofinal"))filter.append(";\n");
+            double clipLen=Math.min(Math.max(.1,t.end-t.offset),joined-t.start);
+            if(clipLen<=.05)continue;
+            String tr="track"+k,next="mix"+k;
+            filter.append("[").append(src).append(":a]atrim=start=").append(n(t.offset))
+                .append(":duration=").append(n(clipLen)).append(",asetpts=PTS-STARTPTS")
+                .append(",aresample=48000,aformat=channel_layouts=stereo,volume=").append(n(t.volume));
+            if(t.fadeIn>0)filter.append(",afade=t=in:st=0:d=").append(n(Math.min(t.fadeIn,clipLen/2)));
+            if(t.fadeOut>0)filter.append(",afade=t=out:st=").append(n(Math.max(0,clipLen-Math.min(t.fadeOut,clipLen/2))))
+                .append(":d=").append(n(Math.min(t.fadeOut,clipLen/2)));
+            long ms=Math.max(0,Math.round(t.start*1000));
+            filter.append(",adelay=").append(ms).append("|").append(ms).append("[").append(tr).append("];\n");
+            filter.append("[").append(aout).append("][").append(tr)
+                .append("]amix=inputs=2:duration=first:dropout_transition=0[").append(next).append("];\n");
+            aout=next;
+        }
+        if(filter.length()>1 && filter.charAt(filter.length()-2)==\';\')filter.setLength(filter.length()-2);
         add(args,"-filter_complex",filter.toString(),"-map","["+v+"]","-map","["+aout+"]");
         add(args,"-c:v","libx264","-preset","medium","-crf",Integer.toString(p.crf),
             "-pix_fmt","yuv420p","-c:a","aac","-b:a","320k","-ar","48000",
             "-movflags","+faststart","-shortest",out.getAbsolutePath());
         return args;
+    }
+    private String speedAudio(double rate){
+        if(rate<.5)return ",atempo=0.5,atempo="+n(rate*2);
+        if(rate>2)return ",atempo=2,atempo="+n(rate/2);
+        return ",atempo="+n(rate);
     }
     private String transition(String s){
         switch(s){

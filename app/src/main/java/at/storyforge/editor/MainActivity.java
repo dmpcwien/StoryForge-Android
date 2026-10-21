@@ -345,7 +345,7 @@ public final class MainActivity extends Activity {
             finally{try{r.release();}catch(Exception ignored){}}
         }
         if(raw==null)return null;
-        if(c.image && c.rotationDegrees!=0){
+        if(c.rotationDegrees!=0){
             Bitmap oriented=PhotoOrientation.rotate(raw,c.rotationDegrees);
             if(oriented!=raw)raw.recycle();
             raw=oriented;
@@ -366,8 +366,9 @@ public final class MainActivity extends Activity {
         if(index<0||index>=project.clips.size())return;
         Project.Clip c=project.clips.get(index);
         previewLabel.setText((index+1)+" / "+project.clips.size()+"     "+time(c.length())
-            +(c.image&&c.rotationDegrees!=0?"  ↻ "+c.rotationDegrees+"°":""));
+            +(c.rotationDegrees!=0?"  ↻ "+c.rotationDegrees+"°":""));
         if(c.image){
+            previewVideo.setRotation(0);
             try{previewVideo.stopPlayback();}catch(Exception ignored){}
             previewVideo.setVisibility(View.GONE);previewImage.setVisibility(View.VISIBLE);
             BitmapFactory.Options o=new BitmapFactory.Options();o.inJustDecodeBounds=true;BitmapFactory.decodeFile(c.path,o);
@@ -381,6 +382,7 @@ public final class MainActivity extends Activity {
             previewImage.setImageBitmap(image);
         }else{
             previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
+            previewVideo.setRotation(c.rotationDegrees);
             previewVideo.setVideoPath(c.path);
             previewVideo.setOnPreparedListener(mp->{
                 try{mp.setVolume((float)project.originalVolume,(float)project.originalVolume);
@@ -411,10 +413,16 @@ public final class MainActivity extends Activity {
     }
     private void reflowPlaylist(){
         double cursor=0;
+        int number=0;
         for(Project.AudioTrack song:project.audioTracks){
             if(!song.sequential)continue;
-            song.start=cursor;
-            cursor+=Math.max(.1,song.end-song.offset);
+            double length=Math.max(.1,song.end-song.offset);
+            double fade=number==0?0:Math.min(project.musicCrossfade,Math.min(length/3,cursor/3));
+            song.start=Math.max(0,cursor-fade);
+            song.fadeIn=number==0?.15:fade;
+            song.fadeOut=Math.min(project.musicCrossfade,length/3);
+            cursor=song.start+length;
+            number++;
         }
     }
     private void movePlaylist(int index,int direction){
@@ -750,12 +758,14 @@ public final class MainActivity extends Activity {
             ? new String[]{"Anzeigedauer festlegen","Nach links verschieben","Nach rechts verschieben",
                 "Bild 90° nach rechts drehen","Bild 90° nach links drehen","Bild um 180° drehen",
                 "Bildausrichtung erneut prüfen","Clip entfernen"}
-            : new String[]{"Anfang und Ende kürzen","Nach links verschieben","Nach rechts verschieben","Clip entfernen"};
+            : new String[]{"Anfang und Ende kürzen","Nach links verschieben","Nach rechts verschieben",
+                "Video 90° rechts drehen","Video 90° links drehen","Video 180° drehen",
+                "Originalausrichtung verwenden","Clip entfernen"};
         new AlertDialog.Builder(this).setTitle(c.name).setItems(actions,(dialog,which)->{
             if(which==0)clipTimingDialog(c);
             if(which==1&&selected>0){java.util.Collections.swap(project.clips,selected,selected-1);selected--;saveProject();refresh();}
             if(which==2&&selected<project.clips.size()-1){java.util.Collections.swap(project.clips,selected,selected+1);selected++;saveProject();refresh();}
-            if(c.image && which>=3 && which<=5){
+            if(which>=3 && which<=5){
                 int delta=which==3?90:which==4?270:180;
                 c.rotationDegrees=(c.rotationDegrees+delta)%360;
                 c.rotationSource="Manuell";
@@ -772,7 +782,11 @@ public final class MainActivity extends Activity {
                     });
                 });
             }
-            if(which==(c.image?7:3))new AlertDialog.Builder(this).setTitle("Clip entfernen?")
+            if(!c.image && which==6){
+                c.rotationDegrees=0;c.rotationSource="Originalausrichtung";
+                thumbCache.evictAll();saveProject();refresh();
+            }
+            if(which==7)new AlertDialog.Builder(this).setTitle("Clip entfernen?")
                 .setMessage("Das Original bleibt auf dem Smartphone gespeichert.")
                 .setPositiveButton("Entfernen",(d,w)->{project.clips.remove(selected);selected=Math.max(0,selected-1);saveProject();refresh();})
                 .setNegativeButton("Abbrechen",null).show();
@@ -890,7 +904,7 @@ public final class MainActivity extends Activity {
         android.widget.Spinner quality=new android.widget.Spinner(this);
         quality.setAdapter(new android.widget.ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Maximal (CRF 15)","Sehr hoch (CRF 17)","Hoch (CRF 20)"}));
         quality.setSelection(project.crf<=15?0:project.crf>=20?2:1);l.addView(quality);
-        l.addView(text("Die App vergrößert Bilder nicht künstlich. 4K ist nur sinnvoll, wenn deine Originale genügend Auflösung haben.",12,0xFFA1A6BD,false),margin(-1,-2,12));
+        l.addView(text("Die Auflösung wird anhand der Quellen begrenzt. Aktuell H.264 / SDR: HDR-Metadaten und 10-Bit-HDR werden nicht erhalten.",12,0xFFA1A6BD,false),margin(-1,-2,12));
         new AlertDialog.Builder(this).setTitle("Export-Qualität").setView(l)
             .setPositiveButton("Übernehmen",(d,w)->{
                 project.maxSize=res.getSelectedItemPosition()==0?720:res.getSelectedItemPosition()==2?2160:1080;

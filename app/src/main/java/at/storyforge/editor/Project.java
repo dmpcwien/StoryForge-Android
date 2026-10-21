@@ -11,6 +11,10 @@ final class Project {
     final List<AudioTrack> audioTracks = new ArrayList<>();
     final List<Sticker> stickers = new ArrayList<>();
     double timelineZoom = 1.0;
+    String filmTemplate = "Familie";
+    double beatSeconds = 0;
+    boolean automaticDucking = true;
+    boolean autoRotateVideos = true;
     String musicPath = "";
     String musicName = "";
     double musicVolume = 0.55;
@@ -40,7 +44,9 @@ final class Project {
             .put("musicName",musicName).put("musicVolume",musicVolume)
             .put("originalVolume",originalVolume).put("maxSize",maxSize)
             .put("fps",fps).put("crf",crf).put("aspect",aspect)
-            .put("audioTracks",aus).put("stickers",sts).put("timelineZoom",timelineZoom);
+            .put("audioTracks",aus).put("stickers",sts).put("timelineZoom",timelineZoom)
+            .put("filmTemplate",filmTemplate).put("beatSeconds",beatSeconds)
+            .put("automaticDucking",automaticDucking).put("autoRotateVideos",autoRotateVideos);
     }
     static Project fromJson(JSONObject j) throws Exception {
         Project p=new Project();
@@ -54,7 +60,10 @@ final class Project {
         p.aspect=j.optString("aspect","original");
         a=j.optJSONArray("audioTracks");if(a!=null)for(int i=0;i<a.length();i++)p.audioTracks.add(AudioTrack.fromJson(a.getJSONObject(i)));
         a=j.optJSONArray("stickers");if(a!=null)for(int i=0;i<a.length();i++)p.stickers.add(Sticker.fromJson(a.getJSONObject(i)));
-        p.timelineZoom=Math.max(.65,Math.min(2.5,j.optDouble("timelineZoom",1)));return p;
+        p.timelineZoom=Math.max(.65,Math.min(2.5,j.optDouble("timelineZoom",1)));
+        p.filmTemplate=j.optString("filmTemplate","Familie");p.beatSeconds=j.optDouble("beatSeconds",0);
+        p.automaticDucking=j.optBoolean("automaticDucking",true);
+        p.autoRotateVideos=j.optBoolean("autoRotateVideos",true);return p;
     }
     static final class Clip {
         String path,name; boolean image,audio;
@@ -85,14 +94,15 @@ final class Project {
     static final class AudioTrack {
         String path="",name=""; double start=0,offset=0,end=0,volume=.6,fadeIn=.25,fadeOut=.5;
         boolean sequential=false;
+        double ducking=.85;
         JSONObject toJson()throws Exception{return new JSONObject().put("path",path).put("name",name)
             .put("start",start).put("offset",offset).put("end",end).put("volume",volume)
-            .put("fadeIn",fadeIn).put("fadeOut",fadeOut).put("sequential",sequential);}
+            .put("fadeIn",fadeIn).put("fadeOut",fadeOut).put("sequential",sequential).put("ducking",ducking);}
         static AudioTrack fromJson(JSONObject j){AudioTrack a=new AudioTrack();a.path=j.optString("path");
             a.name=j.optString("name");a.start=j.optDouble("start");a.offset=j.optDouble("offset");
             a.end=j.optDouble("end");a.volume=j.optDouble("volume",.6);
             a.fadeIn=j.optDouble("fadeIn",.25);a.fadeOut=j.optDouble("fadeOut",.5);
-            a.sequential=j.optBoolean("sequential",false);return a;}
+            a.sequential=j.optBoolean("sequential",false);a.ducking=j.optDouble("ducking",.85);return a;}
     }
     static final class Sticker {
         String path="",name="";double start=0,end=4,x=.7,y=.15,scale=.3;

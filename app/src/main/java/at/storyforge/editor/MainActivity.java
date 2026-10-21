@@ -615,51 +615,49 @@ public final class MainActivity extends Activity {
     }
     private void applyAutoFilm(){
         if(project.clips.isEmpty()){autoRequested=false;toast("Keine Medien für den Film vorhanden.");return;}
-        // Never clear earlier clips, captions or soundtrack: automatic edits operate on selected new clips.
+        loading.setVisibility(View.VISIBLE);
+        // Preserve the previous project for one-click rollback and ordinary undo.
+        saveProject();
         try{
             java.nio.file.Files.copy(projectFile().toPath(),
                 new File(getFilesDir(),"project-before-auto.json").toPath(),
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }catch(Exception ignored){}
-        int begin=Math.max(0,Math.min(autoStartClipCount,project.clips.size()-1));
-        for(int i=begin;i<project.clips.size();i++){
-            Project.Clip c=project.clips.get(i);
-            if(c.image){c.start=0;c.end=autoStyle==2?4.3:autoStyle==1?2.4:3.2;c.kenBurns=true;}
-            else{
-                double target=autoStyle==1?4.8:autoStyle==2?8.0:6.3;
-                if(c.sourceDuration>target+1){
-                    c.start=Math.max(0,(c.sourceDuration-target)/2);
-                    c.end=Math.min(c.sourceDuration,c.start+target);
-                }else {c.start=0;c.end=c.sourceDuration;}
-            }
-            if(i==0){c.transition="cut";continue;}
-            String[] soft={"fade","smoothleft","fadeblack"};
-            String[] action={"slideleft","wipeleft","zoomin","fade"};
-            String[] memory={"fade","circleopen","fadeblack"};
-            String[] styles=autoStyle==0?soft:autoStyle==1?action:memory;
-            c.transition=styles[i%styles.length];
-            c.transitionSeconds=autoStyle==1?.32:.62;
-        }
-        int songCount=Math.max(0,project.audioTracks.size()-autoMusicStartIndex);
-        if(songCount>0) {
-            double slot=project.duration()/songCount;
-            for(int j=0;j<songCount;j++){
-                Project.AudioTrack song=project.audioTracks.get(autoMusicStartIndex+j);
-                double originalEnd=song.end;
-                song.start=Math.max(0,j*slot-(j==0?0:.3));
-                song.offset=0;
-                song.end=Math.min(originalEnd,slot+(j>0?.3:0));
-                song.fadeIn=j==0?.2:.4;
-                song.fadeOut=.4;
-            }
-        }
-        project.musicVolume=autoStyle==1?.8:.55;
-        project.originalVolume=autoStyle==1?.45:.75;
-        autoRequested=false;saveProject();refresh();
-        new AlertDialog.Builder(this).setTitle("Film automatisch zusammengestellt")
-            .setMessage("✓ "+(project.clips.size()-begin)+" Clips arrangiert\n✓ Übergänge gesetzt\n✓ Fotoanimationen aktiviert\n✓ Musik und Originalton abgestimmt\n\nAlle Elemente kannst du in der Zeitleiste nachträglich bearbeiten.")
-            .setPositiveButton("Vorschau",(d,w)->togglePreview())
-            .setNegativeButton("Weiter bearbeiten",null).show();
+        final int begin=Math.max(0,autoStartClipCount);
+        final int fromSong=autoMusicStartIndex;
+        final String style=SmartMontage.STYLES[Math.max(0,Math.min(SmartMontage.STYLES.length-1,autoStyle))];
+        autoRequested=false;
+        fileQueue.execute(()->{
+            String result;
+            try{
+                String firstSong=project.musicPath;
+                if(fromSong<project.audioTracks.size())firstSong=project.audioTracks.get(fromSong).path;
+                double period=firstSong==null||firstSong.isEmpty()?.5:AudioRhythm.estimateBeat(firstSong);
+                result=SmartMontage.apply(project,begin,style,period);
+                int count=project.audioTracks.size()-fromSong;
+                if(count>0){
+                    double slot=project.duration()/count;
+                    for(int j=0;j<count;j++){
+                        Project.AudioTrack song=project.audioTracks.get(fromSong+j);
+                        double available=song.end-song.offset;
+                        double overlap=project.musicCrossfade;
+                        song.start=Math.max(0,j*slot-(j==0?0:overlap));
+                        song.end=song.offset+Math.min(available,slot+(j==0?0:overlap));
+                        song.sequential=true;
+                        song.fadeIn=j==0?.15:Math.min(.4,overlap);
+                        song.fadeOut=Math.min(.4,overlap);
+                    }
+                }
+            }catch(Exception ex){result="Automatik fehlgeschlagen: "+ex.getMessage();}
+            final String message=result;
+            runOnUiThread(()->{
+                loading.setVisibility(View.GONE);saveProject();refresh();
+                new AlertDialog.Builder(this).setTitle("Automatischer Film · "+style)
+                    .setMessage(message+"\n\nAlle Clips bleiben in der Zeitleiste bearbeitbar.")
+                    .setPositiveButton("Effektvorschau",(d,w)->renderEffectPreview())
+                    .setNegativeButton("Weiter bearbeiten",null).show();
+            });
+        });
     }
     private void undoAutoFilm(){
         File f=new File(getFilesDir(),"project-before-auto.json");

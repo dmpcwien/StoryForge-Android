@@ -61,6 +61,8 @@ final class Project {
         double sourceDuration, start=0, end=0;
         double speed=1,brightness=0,contrast=1,saturation=1;
         boolean kenBurns=false;
+        int rotationDegrees=0;
+        String rotationSource="";
         String transition="fade";double transitionSeconds=.65;
         double length(){return Math.max(.1,(end-start)/Math.max(.25,speed));}
         JSONObject toJson()throws Exception{return new JSONObject().put("path",path).put("name",name)
@@ -68,24 +70,29 @@ final class Project {
             .put("start",start).put("end",end).put("transition",transition)
             .put("transitionSeconds",transitionSeconds).put("speed",speed)
             .put("brightness",brightness).put("contrast",contrast).put("saturation",saturation)
-            .put("kenBurns",kenBurns);}
+            .put("kenBurns",kenBurns).put("rotationDegrees",rotationDegrees)
+            .put("rotationSource",rotationSource);}
         static Clip fromJson(JSONObject j){Clip c=new Clip();c.path=j.optString("path");c.name=j.optString("name");
             c.image=j.optBoolean("image");c.audio=j.optBoolean("audio");c.sourceDuration=j.optDouble("sourceDuration",4);
             c.start=j.optDouble("start");c.end=j.optDouble("end",4);
             c.transition=j.optString("transition","fade");c.transitionSeconds=j.optDouble("transitionSeconds",.65);
             c.speed=Math.max(.25,Math.min(4,j.optDouble("speed",1)));c.brightness=j.optDouble("brightness",0);
             c.contrast=j.optDouble("contrast",1);c.saturation=j.optDouble("saturation",1);
-            c.kenBurns=j.optBoolean("kenBurns",false);return c;}
+            c.kenBurns=j.optBoolean("kenBurns",false);
+            c.rotationDegrees=((j.optInt("rotationDegrees",0)%360)+360)%360;
+            c.rotationSource=j.optString("rotationSource","");return c;}
     }
     static final class AudioTrack {
         String path="",name=""; double start=0,offset=0,end=0,volume=.6,fadeIn=.25,fadeOut=.5;
+        boolean sequential=false;
         JSONObject toJson()throws Exception{return new JSONObject().put("path",path).put("name",name)
             .put("start",start).put("offset",offset).put("end",end).put("volume",volume)
-            .put("fadeIn",fadeIn).put("fadeOut",fadeOut);}
+            .put("fadeIn",fadeIn).put("fadeOut",fadeOut).put("sequential",sequential);}
         static AudioTrack fromJson(JSONObject j){AudioTrack a=new AudioTrack();a.path=j.optString("path");
             a.name=j.optString("name");a.start=j.optDouble("start");a.offset=j.optDouble("offset");
             a.end=j.optDouble("end");a.volume=j.optDouble("volume",.6);
-            a.fadeIn=j.optDouble("fadeIn",.25);a.fadeOut=j.optDouble("fadeOut",.5);return a;}
+            a.fadeIn=j.optDouble("fadeIn",.25);a.fadeOut=j.optDouble("fadeOut",.5);
+            a.sequential=j.optBoolean("sequential",false);return a;}
     }
     static final class Sticker {
         String path="",name="";double start=0,end=4,x=.7,y=.15,scale=.3;

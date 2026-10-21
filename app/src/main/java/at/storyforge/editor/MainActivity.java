@@ -180,6 +180,8 @@ public final class MainActivity extends Activity {
         screen.addView(row1,margin(-1,-2,9));
         TextView auto=button("✦  AUTOMATISCHEN FILM ERSTELLEN",0xFF393052,this::startAutoWizard);
         screen.addView(auto,margin(-1,47,7));
+        TextView undoAuto=pill("↶ Letzten automatischen Schnitt rückgängig",SURFACE,this::undoAutoFilm);
+        screen.addView(undoAuto,margin(-1,-2,5));
         LinearLayout row2=horizontal();
         row2.addView(pill("⇄ Übergang",SURFACE,this::chooseTransition),new LinearLayout.LayoutParams(0,-2,1));
         TextView addTitle=pill("T  Text",SURFACE,this::addCaption);
@@ -435,12 +437,11 @@ public final class MainActivity extends Activity {
                             try{meta.setDataSource(a.path);String duration=meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
                                 a.end=duration==null?120:Double.parseDouble(duration)/1000d;
                             }finally{meta.release();}
-                            if(request==PICK_AUTO_MUSIC&&project.musicPath.isEmpty()){
-                                project.musicPath=a.path;project.musicName=a.name;
-                            } else {
-                                if(request==PICK_AUTO_MUSIC)for(Project.AudioTrack old:project.audioTracks)a.start=Math.max(a.start,old.start+old.end-old.offset);
-                                project.audioTracks.add(a);
+                            if(request==PICK_AUTO_MUSIC){
+                                for(Project.AudioTrack old:project.audioTracks)
+                                    a.start=Math.max(a.start,old.start+old.end-old.offset);
                             }
+                            project.audioTracks.add(a);
                         }
                     } else{
                         Project.Clip c=new Project.Clip();c.path=copy.getAbsolutePath();c.name=name;c.image=image;
@@ -497,6 +498,11 @@ public final class MainActivity extends Activity {
     private void applyAutoFilm(){
         if(project.clips.isEmpty()){autoRequested=false;toast("Keine Medien für den Film vorhanden.");return;}
         // Never clear earlier clips, captions or soundtrack: automatic edits operate on selected new clips.
+        try{
+            java.nio.file.Files.copy(projectFile().toPath(),
+                new File(getFilesDir(),"project-before-auto.json").toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }catch(Exception ignored){}
         int begin=Math.max(0,Math.min(autoStartClipCount,project.clips.size()-1));
         for(int i=begin;i<project.clips.size();i++){
             Project.Clip c=project.clips.get(i);
@@ -523,6 +529,19 @@ public final class MainActivity extends Activity {
             .setMessage("✓ "+(project.clips.size()-begin)+" Clips arrangiert\n✓ Übergänge gesetzt\n✓ Fotoanimationen aktiviert\n✓ Musik und Originalton abgestimmt\n\nAlle Elemente kannst du in der Zeitleiste nachträglich bearbeiten.")
             .setPositiveButton("Vorschau",(d,w)->togglePreview())
             .setNegativeButton("Weiter bearbeiten",null).show();
+    }
+    private void undoAutoFilm(){
+        File f=new File(getFilesDir(),"project-before-auto.json");
+        if(!f.exists()){toast("Kein vorheriger Automatik-Schnitt vorhanden.");return;}
+        new AlertDialog.Builder(this).setTitle("Automatik-Schnitt rückgängig?")
+            .setMessage("Der zuvor gespeicherte Bearbeitungsstand wird wiederhergestellt.")
+            .setPositiveButton("Wiederherstellen",(d,w)->{
+                try{
+                    byte[] bytes=java.nio.file.Files.readAllBytes(f.toPath());
+                    project=Project.fromJson(new JSONObject(new String(bytes,StandardCharsets.UTF_8)));
+                    saveProject();f.delete();selected=0;stopPreview();refresh();
+                }catch(Exception ex){toast("Wiederherstellung fehlgeschlagen.");}
+            }).setNegativeButton("Abbrechen",null).show();
     }
     private void splitSelected(){
         if(project.clips.isEmpty())return;

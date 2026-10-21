@@ -285,7 +285,7 @@ final class ExportEngine {
                 .append("]amix=inputs=2:duration=first:dropout_transition=0[").append(next).append("];\n");
             aout=next;
         }
-        if(filter.length()>1 && filter.charAt(filter.length()-2)==\';\')filter.setLength(filter.length()-2);
+        if(filter.length()>1 && filter.charAt(filter.length()-2)==';')filter.setLength(filter.length()-2);
         add(args,"-filter_complex",filter.toString(),"-map","["+v+"]","-map","["+aout+"]");
         add(args,"-c:v","libx264","-preset","medium","-crf",Integer.toString(p.crf),
             "-pix_fmt","yuv420p","-c:a","aac","-b:a","320k","-ar","48000",

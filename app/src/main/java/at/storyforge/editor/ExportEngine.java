@@ -115,7 +115,9 @@ final class ExportEngine {
         if(c.image) {
             BitmapFactory.Options opts=new BitmapFactory.Options(); opts.inJustDecodeBounds=true;
             BitmapFactory.decodeFile(c.path,opts);
-            return new int[]{Math.max(2,opts.outWidth),Math.max(2,opts.outHeight)};
+            int imgW=Math.max(2,opts.outWidth),imgH=Math.max(2,opts.outHeight);
+            return c.rotationDegrees==90||c.rotationDegrees==270
+                ?new int[]{imgH,imgW}:new int[]{imgW,imgH};
         }
         MediaMetadataRetriever m=new MediaMetadataRetriever();
         try {
@@ -139,7 +141,7 @@ final class ExportEngine {
         for(Project.Clip c:p.clips) {
             if(!new File(c.path).exists())throw new Exception("Datei nicht gefunden: "+c.name);
             if(c.image){
-                add(args,"-loop","1","-framerate",Integer.toString(frameRate),"-t",n(c.length()),"-i",c.path);
+                add(args,"-noautorotate","-loop","1","-framerate",Integer.toString(frameRate),"-t",n(c.length()),"-i",c.path);
             }else{
                 add(args,"-ss",n(c.start),"-t",n(c.end-c.start),"-i",c.path);
             }
@@ -184,6 +186,7 @@ final class ExportEngine {
             String video="["+videoInputs.get(i)+":v]";
             String audio="["+audioInputs.get(i)+":a]";
             filter.append(video)
+                .append(c.image?orientationFilter(c.rotationDegrees):"")
                 .append("scale=").append(w).append(":").append(h)
                 .append(":force_original_aspect_ratio=decrease:flags=lanczos")
                 .append(",pad=").append(w).append(":").append(h)
@@ -292,6 +295,14 @@ final class ExportEngine {
             "-pix_fmt","yuv420p","-c:a","aac","-b:a","320k","-ar","48000",
             "-movflags","+faststart","-shortest",out.getAbsolutePath());
         return args;
+    }
+    private String orientationFilter(int degrees){
+        switch(((degrees%360)+360)%360){
+            case 90:return "transpose=clock,";
+            case 180:return "hflip,vflip,";
+            case 270:return "transpose=cclock,";
+            default:return "";
+        }
     }
     private String speedAudio(double rate){
         if(rate<.5)return ",atempo=0.5,atempo="+n(rate*2);

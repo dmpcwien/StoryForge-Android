@@ -69,7 +69,7 @@ public final class MainActivity extends Activity {
     };
     private int selected=0;
     private LinearLayout screen,timeline,captionList,audioList,stickerList;
-    private int autoStyle=0,autoStartClipCount=0;
+    private int autoStyle=0,autoStartClipCount=0,autoMusicStartIndex=0;
     private boolean autoRequested=false;
     private FrameLayout previewContainer;
     private ImageView previewImage;
@@ -387,6 +387,7 @@ public final class MainActivity extends Activity {
             }).setNegativeButton("Abbrechen",null).show();
     }
     private void openAutoMusicPicker(){
+        autoMusicStartIndex=project.audioTracks.size();
         new AlertDialog.Builder(this).setTitle("Musik für den Film")
             .setMessage("Wähle ein oder mehrere Lieder. Du kannst den Film auch ohne Musik erstellen.")
             .setPositiveButton("Musik auswählen",(d,w)->{
@@ -521,6 +522,19 @@ public final class MainActivity extends Activity {
             String[] styles=autoStyle==0?soft:autoStyle==1?action:memory;
             c.transition=styles[i%styles.length];
             c.transitionSeconds=autoStyle==1?.32:.62;
+        }
+        int songCount=Math.max(0,project.audioTracks.size()-autoMusicStartIndex);
+        if(songCount>0) {
+            double slot=project.duration()/songCount;
+            for(int j=0;j<songCount;j++){
+                Project.AudioTrack song=project.audioTracks.get(autoMusicStartIndex+j);
+                double originalEnd=song.end;
+                song.start=Math.max(0,j*slot-(j==0?0:.3));
+                song.offset=0;
+                song.end=Math.min(originalEnd,slot+(j>0?.3:0));
+                song.fadeIn=j==0?.2:.4;
+                song.fadeOut=.4;
+            }
         }
         project.musicVolume=autoStyle==1?.8:.55;
         project.originalVolume=autoStyle==1?.45:.75;

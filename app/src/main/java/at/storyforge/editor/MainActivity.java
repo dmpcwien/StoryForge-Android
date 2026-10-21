@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.Intent;
+import android.content.ClipData;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -24,6 +25,9 @@ import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.DragEvent;
+import android.view.ScaleGestureDetector;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -53,10 +57,10 @@ import java.util.concurrent.Executors;
 
 /** Touch-first editor, persistent projects, native offline export. */
 public final class MainActivity extends Activity {
-    private static final int PICK_MEDIA=410,PICK_MUSIC=411;
-    private static final int BG=Color.rgb(11,13,23), SURFACE=Color.rgb(24,27,43),
-        SURFACE_2=Color.rgb(37,41,61),PURPLE=Color.rgb(173,132,255),
-        CYAN=Color.rgb(91,217,229), WHITE=Color.rgb(242,244,255), MUTED=Color.rgb(155,161,183);
+    private static final int PICK_MEDIA=410,PICK_MUSIC=411,PICK_AUTO_MEDIA=412,PICK_AUTO_MUSIC=413,PICK_STICKER=414,PICK_LAYER_AUDIO=415;
+    private static final int BG=0xFF0D0F13, SURFACE=0xFF1A1D24,
+        SURFACE_2=0xFF292E39,PURPLE=0xFF9A78FF,
+        CYAN=0xFF85DCE1, WHITE=0xFFF5F6FA, MUTED=0xFFA4ACB9;
     private final ExecutorService fileQueue=Executors.newSingleThreadExecutor();
     private final Handler main=new Handler(Looper.getMainLooper());
     private Project project=new Project();
@@ -64,7 +68,9 @@ public final class MainActivity extends Activity {
         @Override protected int sizeOf(String key,Bitmap value){return value.getByteCount();}
     };
     private int selected=0;
-    private LinearLayout screen,timeline,captionList;
+    private LinearLayout screen,timeline,captionList,audioList,stickerList;
+    private int autoStyle=0,autoStartClipCount=0;
+    private boolean autoRequested=false;
     private FrameLayout previewContainer;
     private ImageView previewImage;
     private VideoView previewVideo;
@@ -118,7 +124,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout brand=horizontal();
         LinearLayout brandLeft=vertical();
-        TextView eyebrow=text("STORYFORGE   /   CREATOR STUDIO",10,CYAN,true);eyebrow.setLetterSpacing(.14f);
+        TextView eyebrow=text("STORYFORGE   /   PREMIUM STUDIO 1.1",10,CYAN,true);eyebrow.setLetterSpacing(.14f);
         brandLeft.addView(eyebrow);
         TextView title=text("Dein Film. Dein Stil.",25,WHITE,true);brandLeft.addView(title,margin(-1,-2,4));
         brand.addView(brandLeft,new LinearLayout.LayoutParams(0,-2,1));
@@ -142,7 +148,7 @@ public final class MainActivity extends Activity {
         badgeParams.setMargins(dp(12),dp(12),0,0);previewContainer.addView(previewLabel,badgeParams);
         LinearLayout.LayoutParams pp=lp(-1,-2);screen.addView(previewContainer,pp);
         // 16:9 preview; keeps portrait video letterboxed without cropping.
-        previewContainer.getLayoutParams().height=(int)(getResources().getDisplayMetrics().widthPixels*9f/16f)-dp(18);
+        previewContainer.getLayoutParams().height=(int)(getResources().getDisplayMetrics().widthPixels*.62f)-dp(18);
 
         LinearLayout transport=horizontal();transport.setPadding(0,dp(10),0,dp(8));
         playButton=button("▶ Film abspielen",0xFF3C325D,this::togglePreview);
@@ -153,10 +159,15 @@ public final class MainActivity extends Activity {
 
         LinearLayout header=horizontal();TextView tl=text("ZEITLEISTE",11,CYAN,true);tl.setLetterSpacing(.12f);
         header.addView(tl,new LinearLayout.LayoutParams(0,-2,1));
-        TextView reorder=text("Antippen = bearbeiten",11,MUTED,false);header.addView(reorder);
+        TextView reorder=text("Lange halten = ziehen · 2 Finger = Zoom",10,MUTED,false);header.addView(reorder);
         screen.addView(header,margin(-1,-2,18));
         HorizontalScrollView timelineScroll=new HorizontalScrollView(this);timelineScroll.setHorizontalScrollBarEnabled(false);
         timeline=horizontal();timeline.setPadding(0,dp(9),dp(12),dp(9));timelineScroll.addView(timeline);
+        ScaleGestureDetector zoom=new ScaleGestureDetector(this,new ScaleGestureDetector.SimpleOnScaleGestureListener(){
+            @Override public boolean onScale(ScaleGestureDetector d){project.timelineZoom=Math.min(2.8,Math.max(.7,project.timelineZoom*d.getScaleFactor()));refresh();return true;}
+            @Override public void onScaleEnd(ScaleGestureDetector d){saveProject();}
+        });
+        timelineScroll.setOnTouchListener((v,event)->{zoom.onTouchEvent(event);return zoom.isInProgress();});
         screen.addView(timelineScroll,margin(-1,112,5));
         selectionLabel=text("Noch keine Medien ausgewählt",12,MUTED,false);
         screen.addView(selectionLabel,margin(-1,-2,4));
@@ -166,14 +177,23 @@ public final class MainActivity extends Activity {
         row1.addView(media,new LinearLayout.LayoutParams(0,dp(46),1));
         TextView edit=button("✂ Clip ändern",SURFACE_2,this::editSelected);
         LinearLayout.LayoutParams e=new LinearLayout.LayoutParams(0,dp(46),1);e.leftMargin=dp(8);row1.addView(edit,e);
-        screen.addView(row1,margin(-1,-2,15));
+        screen.addView(row1,margin(-1,-2,9));
+        TextView auto=button("✦  AUTOMATISCHEN FILM ERSTELLEN",0xFF393052,this::startAutoWizard);
+        screen.addView(auto,margin(-1,47,7));
         LinearLayout row2=horizontal();
         row2.addView(pill("⇄ Übergang",SURFACE,this::chooseTransition),new LinearLayout.LayoutParams(0,-2,1));
         TextView addTitle=pill("T  Text",SURFACE,this::addCaption);
         LinearLayout.LayoutParams pc=new LinearLayout.LayoutParams(0,-2,1);pc.leftMargin=dp(8);row2.addView(addTitle,pc);
         TextView settings=pill("⚙ Qualität",SURFACE,this::qualityDialog);
         LinearLayout.LayoutParams qc=new LinearLayout.LayoutParams(0,-2,1);qc.leftMargin=dp(8);row2.addView(settings,qc);
-        screen.addView(row2,margin(-1,-2,9));
+        screen.addView(row2,margin(-1,-2,8));
+        LinearLayout row3=horizontal();
+        row3.addView(pill("✂ Teilen",SURFACE,this::splitSelected),new LinearLayout.LayoutParams(0,-2,1));
+        TextView fx=pill("◈ Farbe/Tempo",SURFACE,this::editEffects);
+        LinearLayout.LayoutParams fp=new LinearLayout.LayoutParams(0,-2,1);fp.leftMargin=dp(7);row3.addView(fx,fp);
+        TextView ov=pill("▧ Overlay",SURFACE,this::pickSticker);
+        LinearLayout.LayoutParams op=new LinearLayout.LayoutParams(0,-2,1);op.leftMargin=dp(7);row3.addView(ov,op);
+        screen.addView(row3,margin(-1,-2,8));
 
         LinearLayout musicBar=horizontal();musicBar.setPadding(dp(14),dp(10),dp(10),dp(10));musicBar.setBackground(stroke(SURFACE,0xFF353957,14));
         LinearLayout musicTitle=vertical();musicTitle.addView(text("♪  SOUNDTRACK",11,CYAN,true));
@@ -187,6 +207,12 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(0,-2,1);rp.leftMargin=dp(8);aux.addView(remove,rp);
         screen.addView(aux,margin(-1,-2,8));
 
+        LinearLayout audioHeading=horizontal();audioHeading.addView(text("♫  AUDIOSPUREN",11,CYAN,true),new LinearLayout.LayoutParams(0,-2,1));
+        audioHeading.addView(pill("+ Musik/SFX",SURFACE_2,this::pickLayerAudio),lp(116,-2));
+        screen.addView(audioHeading,margin(-1,-2,14));
+        audioList=vertical();screen.addView(audioList,margin(-1,-2,7));
+        screen.addView(text("▧  BILD-OVERLAYS",11,CYAN,true),margin(-1,-2,14));
+        stickerList=vertical();screen.addView(stickerList,margin(-1,-2,7));
         TextView captionsHeading=text("TEXT-EINBLENDUNGEN",11,CYAN,true);captionsHeading.setLetterSpacing(.1f);
         screen.addView(captionsHeading,margin(-1,-2,17));
         captionList=vertical();screen.addView(captionList,margin(-1,-2,7));
@@ -196,7 +222,7 @@ public final class MainActivity extends Activity {
         screen.addView(loading,margin(-1,5,15));
         TextView info=text("Offline · Originale bleiben unverändert · MP4 in Galerie/Movies/StoryForge",11,MUTED,false);
         info.setGravity(Gravity.CENTER);screen.addView(info,margin(-1,-2,20));
-        TextView previewNote=text("Vorschau: schnelle Clipfolge. Übergangseffekte sind im exportierten Video sichtbar.",11,MUTED,false);
+        TextView previewNote=text("Schnittfolge in Echtzeit; Übergänge und Effekte werden beim Export vollständig gerendert.",11,MUTED,false);
         previewNote.setGravity(Gravity.CENTER);screen.addView(previewNote,margin(-1,-2,7));
     }
     private String time(double seconds){int s=(int)Math.max(0,seconds);return String.format(Locale.GERMANY,"%02d:%02d",s/60,s%60);}
@@ -215,13 +241,28 @@ public final class MainActivity extends Activity {
             ImageView thumb=new ImageView(this);thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
             try{Bitmap bm=thumbnail(c);if(bm!=null)thumb.setImageBitmap(bm);else thumb.setBackground(panel(SURFACE_2,7));}
             catch(Exception ignored){thumb.setBackground(panel(SURFACE_2,7));}
-            card.addView(thumb,lp(110,61));
+            card.addView(thumb,lp((int)(110*project.timelineZoom),61));
             String nm=c.name.length()>17?c.name.substring(0,14)+"…":c.name;
             TextView name=text((c.image?"▣ ":"▶ ")+nm,10.5f,WHITE,true);name.setSingleLine(true);
-            card.addView(name,margin(110,20,3));
+            card.addView(name,margin((int)(110*project.timelineZoom),20,3));
             card.addView(text(time(c.length())+"   "+(i==0?"START":transitionLabel(c.transition)),10,MUTED,false));
-            LinearLayout.LayoutParams p=lp(124,112);p.rightMargin=dp(7);timeline.addView(card,p);
+            LinearLayout.LayoutParams p=lp((int)(124*project.timelineZoom),112);p.rightMargin=dp(7);timeline.addView(card,p);
             card.setOnClickListener(v->{stopPreview();selected=index;showSelected();refresh();});
+            card.setOnLongClickListener(v->{
+                v.startDragAndDrop(ClipData.newPlainText("clip",Integer.toString(index)),new View.DragShadowBuilder(v),null,0);return true;
+            });
+            card.setOnDragListener((v,event)->{
+                if(event.getAction()!=DragEvent.ACTION_DROP)return true;
+                try{
+                    int from=Integer.parseInt(event.getClipData().getItemAt(0).getText().toString());
+                    if(from>=0&&from<project.clips.size()&&from!=index){
+                        Project.Clip moving=project.clips.remove(from);
+                        project.clips.add(Math.min(index,project.clips.size()),moving);
+                        selected=Math.min(index,project.clips.size()-1);saveProject();refresh();
+                    }
+                }catch(Exception ignored){toast("Verschieben fehlgeschlagen");}
+                return true;
+            });
         }
         selected=Math.max(0,Math.min(selected,Math.max(0,project.clips.size()-1)));
         selectionLabel.setText(project.clips.isEmpty()?"Noch keine Medien ausgewählt":
@@ -238,6 +279,27 @@ public final class MainActivity extends Activity {
             r.addView(t,new LinearLayout.LayoutParams(0,-2,1));
             r.addView(pill("Bearbeiten",SURFACE_2,()->editCaption(at)),lp(90,-2));
             captionList.addView(r,margin(-1,-2,5));
+        }
+        if(audioList!=null){
+            audioList.removeAllViews();
+            if(project.audioTracks.isEmpty())audioList.addView(text("Noch keine zusätzliche Audiospur.",11,MUTED,false));
+            for(int i=0;i<project.audioTracks.size();i++){
+                final int at=i;Project.AudioTrack a=project.audioTracks.get(i);
+                LinearLayout row=horizontal();
+                row.addView(text("♫  "+a.name+"  ·  "+time(a.start),12,WHITE,false),new LinearLayout.LayoutParams(0,-2,1));
+                row.addView(pill("Bearbeiten",SURFACE_2,()->editAudio(at)),lp(90,-2));
+                audioList.addView(row,margin(-1,-2,6));
+            }
+        }
+        if(stickerList!=null){
+            stickerList.removeAllViews();
+            for(int i=0;i<project.stickers.size();i++){
+                final int at=i;Project.Sticker st=project.stickers.get(i);
+                LinearLayout row=horizontal();
+                row.addView(text("▧  "+st.name+"  ·  "+time(st.start)+"–"+time(st.end),12,WHITE,false),new LinearLayout.LayoutParams(0,-2,1));
+                row.addView(pill("Bearbeiten",SURFACE_2,()->editSticker(at)),lp(90,-2));
+                stickerList.addView(row,margin(-1,-2,6));
+            }
         }
         if(!playing)showSelected();
     }
@@ -300,13 +362,49 @@ public final class MainActivity extends Activity {
         i.setType("*/*");i.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","video/*"});
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);startActivityForResult(i,PICK_MEDIA);
     }
+    private void pickLayerAudio(){
+        Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("audio/*");i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);startActivityForResult(i,PICK_LAYER_AUDIO);
+    }
+    private void pickSticker(){
+        Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/*");startActivityForResult(i,PICK_STICKER);
+    }
+    private void startAutoWizard(){
+        new AlertDialog.Builder(this).setTitle("Automatisch Film erstellen")
+            .setSingleChoiceItems(new String[]{"Sanft · Reise & Familie","Dynamisch · Musikvideo","Erinnerungen · Fotoalbum"},autoStyle,(d,which)->autoStyle=which)
+            .setPositiveButton("Medien auswählen",(d,w)->{
+                autoStartClipCount=project.clips.size();autoRequested=true;
+                Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");i.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","video/*"});
+                i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);startActivityForResult(i,PICK_AUTO_MEDIA);
+            })
+            .setNeutralButton("Vorhandene Medien nutzen",(d,w)->{
+                if(project.clips.isEmpty()){toast("Bitte zuerst Bilder und Videos hinzufügen.");return;}
+                autoStartClipCount=0;autoRequested=true;openAutoMusicPicker();
+            }).setNegativeButton("Abbrechen",null).show();
+    }
+    private void openAutoMusicPicker(){
+        new AlertDialog.Builder(this).setTitle("Musik für den Film")
+            .setMessage("Wähle ein oder mehrere Lieder. Du kannst den Film auch ohne Musik erstellen.")
+            .setPositiveButton("Musik auswählen",(d,w)->{
+                Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("audio/*");i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
+                startActivityForResult(i,PICK_AUTO_MUSIC);
+            })
+            .setNegativeButton("Ohne Musik",(d,w)->applyAutoFilm()).show();
+    }
     private void pickMusic(){
         Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("audio/*");
         startActivityForResult(i,PICK_MUSIC);
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
-        if(result!=RESULT_OK||data==null)return;
+        if(result!=RESULT_OK||data==null){
+            if(request==PICK_AUTO_MUSIC&&autoRequested)applyAutoFilm();
+            if(request==PICK_AUTO_MEDIA)autoRequested=false;
+            return;
+        }
         List<Uri> all=new ArrayList<>();
         if(data.getClipData()!=null)for(int i=0;i<data.getClipData().getItemCount();i++)all.add(data.getClipData().getItemAt(i).getUri());
         else if(data.getData()!=null)all.add(data.getData());
@@ -317,17 +415,34 @@ public final class MainActivity extends Activity {
             for(Uri u:all){
                 try{
                     String mime=getContentResolver().getType(u);
-                    boolean music=request==PICK_MUSIC;
+                    boolean music=request==PICK_MUSIC||request==PICK_LAYER_AUDIO||request==PICK_AUTO_MUSIC;
                     String name=fileName(u);
                     String lower=name.toLowerCase(Locale.ROOT);
-                    boolean image=!music && ((mime!=null&&mime.startsWith("image/")) ||
-                        lower.endsWith(".jpg")||lower.endsWith(".jpeg")||lower.endsWith(".png")||lower.endsWith(".webp")||lower.endsWith(".heic"));
+                    boolean image=request==PICK_STICKER || (!music && ((mime!=null&&mime.startsWith("image/")) ||
+                        lower.endsWith(".jpg")||lower.endsWith(".jpeg")||lower.endsWith(".png")||lower.endsWith(".webp")||lower.endsWith(".heic")));
                     boolean video=!music && ((mime!=null&&mime.startsWith("video/")) ||
                         lower.endsWith(".mp4")||lower.endsWith(".mov")||lower.endsWith(".mkv")||lower.endsWith(".webm"));
                     if(!music&&!image&&!video)throw new Exception("Nicht unterstützte Datei: "+u);
                     File copy=importFile(u,name);
-                    if(music){project.musicPath=copy.getAbsolutePath();project.musicName=name;}
-                    else{
+                    if(request==PICK_STICKER){
+                        Project.Sticker st=new Project.Sticker();st.path=copy.getAbsolutePath();st.name=name;
+                        st.end=Math.min(project.duration(),5);project.stickers.add(st);
+                    } else if(music){
+                        if(request==PICK_MUSIC){project.musicPath=copy.getAbsolutePath();project.musicName=name;}
+                        else {
+                            Project.AudioTrack a=new Project.AudioTrack();a.path=copy.getAbsolutePath();a.name=name;
+                            MediaMetadataRetriever meta=new MediaMetadataRetriever();
+                            try{meta.setDataSource(a.path);String duration=meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                                a.end=duration==null?120:Double.parseDouble(duration)/1000d;
+                            }finally{meta.release();}
+                            if(request==PICK_AUTO_MUSIC&&project.musicPath.isEmpty()){
+                                project.musicPath=a.path;project.musicName=a.name;
+                            } else {
+                                if(request==PICK_AUTO_MUSIC)for(Project.AudioTrack old:project.audioTracks)a.start=Math.max(a.start,old.start+old.end-old.offset);
+                                project.audioTracks.add(a);
+                            }
+                        }
+                    } else{
                         Project.Clip c=new Project.Clip();c.path=copy.getAbsolutePath();c.name=name;c.image=image;
                         if(image){c.sourceDuration=4;c.end=4;}
                         else{
@@ -350,6 +465,8 @@ public final class MainActivity extends Activity {
             saveProject();String issue=error;int added=count;
             runOnUiThread(()->{
                 loading.setVisibility(View.GONE);refresh();
+                if(request==PICK_AUTO_MEDIA&&autoRequested)openAutoMusicPicker();
+                if(request==PICK_AUTO_MUSIC&&autoRequested)applyAutoFilm();
                 Toast.makeText(this,added+" Datei(en) übernommen"+(issue!=null?" · Fehler: "+issue:""),Toast.LENGTH_LONG).show();
             });
         });
@@ -376,6 +493,104 @@ public final class MainActivity extends Activity {
             while((read=input.read(buffer))!=-1)output.write(buffer,0,read);
         }catch(Exception e){dst.delete();throw e;}
         return dst;
+    }
+    private void applyAutoFilm(){
+        if(project.clips.isEmpty()){autoRequested=false;toast("Keine Medien für den Film vorhanden.");return;}
+        // Never clear earlier clips, captions or soundtrack: automatic edits operate on selected new clips.
+        int begin=Math.max(0,Math.min(autoStartClipCount,project.clips.size()-1));
+        for(int i=begin;i<project.clips.size();i++){
+            Project.Clip c=project.clips.get(i);
+            if(c.image){c.start=0;c.end=autoStyle==2?4.3:autoStyle==1?2.4:3.2;c.kenBurns=true;}
+            else{
+                double target=autoStyle==1?4.8:autoStyle==2?8.0:6.3;
+                if(c.sourceDuration>target+1){
+                    c.start=Math.max(0,(c.sourceDuration-target)/2);
+                    c.end=Math.min(c.sourceDuration,c.start+target);
+                }else {c.start=0;c.end=c.sourceDuration;}
+            }
+            if(i==0){c.transition="cut";continue;}
+            String[] soft={"fade","smoothleft","fadeblack"};
+            String[] action={"slideleft","wipeleft","zoom","fade"};
+            String[] memory={"fade","circleopen","fadeblack"};
+            String[] styles=autoStyle==0?soft:autoStyle==1?action:memory;
+            c.transition=styles[i%styles.length];
+            c.transitionSeconds=autoStyle==1?.32:.62;
+        }
+        project.musicVolume=autoStyle==1?.8:.55;
+        project.originalVolume=autoStyle==1?.45:.75;
+        autoRequested=false;saveProject();refresh();
+        new AlertDialog.Builder(this).setTitle("Film automatisch zusammengestellt")
+            .setMessage("✓ "+(project.clips.size()-begin)+" Clips arrangiert\n✓ Übergänge gesetzt\n✓ Fotoanimationen aktiviert\n✓ Musik und Originalton abgestimmt\n\nAlle Elemente kannst du in der Zeitleiste nachträglich bearbeiten.")
+            .setPositiveButton("Vorschau",(d,w)->togglePreview())
+            .setNegativeButton("Weiter bearbeiten",null).show();
+    }
+    private void splitSelected(){
+        if(project.clips.isEmpty())return;
+        Project.Clip c=project.clips.get(selected);
+        if(c.image){toast("Fotos können über ihre Dauer angepasst werden.");return;}
+        double length=c.end-c.start;
+        if(length<.5){toast("Clip ist zu kurz.");return;}
+        double middle=c.start+length/2;
+        Project.Clip tail=Project.Clip.fromJson(c.toJson());
+        tail.start=middle;tail.transition="cut";c.end=middle;
+        project.clips.add(selected+1,tail);selected++;saveProject();refresh();
+    }
+    private void editEffects(){
+        if(project.clips.isEmpty()){toast("Zuerst Medien hinzufügen.");return;}
+        Project.Clip c=project.clips.get(selected);
+        LinearLayout l=vertical();l.setPadding(dp(20),dp(8),dp(20),dp(8));
+        EditText speed=number(c.speed),brightness=number(c.brightness),contrast=number(c.contrast),saturation=number(c.saturation);
+        l.addView(field("Tempo (0,25 bis 4)",speed));
+        l.addView(field("Helligkeit (-1 bis 1)",brightness));
+        l.addView(field("Kontrast (0,1 bis 3)",contrast));
+        l.addView(field("Sättigung (0 bis 3)",saturation));
+        android.widget.CheckBox kb=new android.widget.CheckBox(this);
+        kb.setText("Foto langsam zoomen (Ken Burns)");kb.setChecked(c.kenBurns);
+        if(c.image)l.addView(kb);
+        new AlertDialog.Builder(this).setTitle("Farbe / Geschwindigkeit").setView(l)
+            .setPositiveButton("Speichern",(d,w)->{
+                try{
+                    c.speed=Math.max(.25,Math.min(4,parse(speed)));c.brightness=Math.max(-1,Math.min(1,parse(brightness)));
+                    c.contrast=Math.max(.1,Math.min(3,parse(contrast)));c.saturation=Math.max(0,Math.min(3,parse(saturation)));
+                    c.kenBurns=kb.isChecked();saveProject();refresh();
+                }catch(Exception ex){toast("Ungültige Eingabe.");}
+            }).setNegativeButton("Abbrechen",null).show();
+    }
+    private void editAudio(int index){
+        Project.AudioTrack a=project.audioTracks.get(index);
+        LinearLayout l=vertical();l.setPadding(dp(20),dp(8),dp(20),dp(8));
+        EditText start=number(a.start),offset=number(a.offset),end=number(a.end),volume=number(a.volume),
+            fadeIn=number(a.fadeIn),fadeOut=number(a.fadeOut);
+        l.addView(field("Beginn im Film (Sek.)",start));l.addView(field("Quelle ab (Sek.)",offset));
+        l.addView(field("Quelle bis (Sek.)",end));l.addView(field("Lautstärke 0–1,5",volume));
+        l.addView(field("Einblenden (Sek.)",fadeIn));l.addView(field("Ausblenden (Sek.)",fadeOut));
+        new AlertDialog.Builder(this).setTitle(a.name).setView(l)
+            .setPositiveButton("Speichern",(d,w)->{
+                try{double st=parse(start),off=parse(offset),en=parse(end);
+                    if(st<0||off<0||en<=off)throw new Exception();
+                    a.start=st;a.offset=off;a.end=en;
+                    a.volume=Math.max(0,Math.min(1.5,parse(volume)));
+                    a.fadeIn=Math.max(0,parse(fadeIn));a.fadeOut=Math.max(0,parse(fadeOut));
+                    saveProject();refresh();
+                }catch(Exception ex){toast("Ungültige Audiozeiten.");}
+            }).setNeutralButton("Löschen",(d,w)->{project.audioTracks.remove(index);saveProject();refresh();})
+            .setNegativeButton("Abbrechen",null).show();
+    }
+    private void editSticker(int index){
+        Project.Sticker s=project.stickers.get(index);
+        LinearLayout l=vertical();l.setPadding(dp(20),dp(8),dp(20),dp(8));
+        EditText start=number(s.start),end=number(s.end),x=number(s.x*100),y=number(s.y*100),scale=number(s.scale*100);
+        l.addView(field("Beginn in Sekunden",start));l.addView(field("Ende in Sekunden",end));
+        l.addView(field("Position X in %",x));l.addView(field("Position Y in %",y));
+        l.addView(field("Breite in %",scale));
+        new AlertDialog.Builder(this).setTitle(s.name).setView(l)
+            .setPositiveButton("Speichern",(d,w)->{
+                try{s.start=Math.max(0,parse(start));s.end=Math.max(s.start+.1,parse(end));
+                    s.x=Math.max(0,Math.min(1,parse(x)/100));s.y=Math.max(0,Math.min(1,parse(y)/100));
+                    s.scale=Math.max(.05,Math.min(1,parse(scale)/100));saveProject();refresh();
+                }catch(Exception ex){toast("Ungültige Werte.");}
+            }).setNeutralButton("Löschen",(d,w)->{project.stickers.remove(index);saveProject();refresh();})
+            .setNegativeButton("Abbrechen",null).show();
     }
     private void editSelected(){
         if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}

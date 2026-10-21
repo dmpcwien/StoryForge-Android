@@ -56,12 +56,13 @@ final class ExportEngine {
                 if(project.clips.isEmpty())throw new IllegalStateException("Bitte mindestens ein Foto oder Video auswählen.");
                 File dir=new File(ctx.getCacheDir(),"exports");
                 if(!dir.exists()&&!dir.mkdirs())throw new Exception("Exportordner konnte nicht angelegt werden.");
+                Project temp=project;
                 if(!publish) {
-                    project=Project.fromJson(project.toJson());
-                    project.maxSize=720;project.fps=30;
-                    while(project.clips.size()>5)project.clips.remove(project.clips.size()-1);
+                    temp=Project.fromJson(project.toJson());
+                    temp.maxSize=720;temp.fps=30;
+                    while(temp.clips.size()>5)temp.clips.remove(temp.clips.size()-1);
                 }
-                final Project rendering=project;
+                final Project rendering=temp;
                 File out=new File(dir,(publish?"StoryForge_":"StoryForge_preview_")+System.currentTimeMillis()+".mp4");
                 List<String> args=buildCommand(rendering,out,dir);
                 if(canceled)return;

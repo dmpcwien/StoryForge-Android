@@ -13,6 +13,7 @@ final class Project {
     double timelineZoom = 1.0;
     String filmTemplate = "Familie";
     double beatSeconds = 0;
+    double musicCrossfade = .4;
     boolean automaticDucking = true;
     boolean autoRotateVideos = true;
     String musicPath = "";
@@ -45,7 +46,7 @@ final class Project {
             .put("originalVolume",originalVolume).put("maxSize",maxSize)
             .put("fps",fps).put("crf",crf).put("aspect",aspect)
             .put("audioTracks",aus).put("stickers",sts).put("timelineZoom",timelineZoom)
-            .put("filmTemplate",filmTemplate).put("beatSeconds",beatSeconds)
+            .put("filmTemplate",filmTemplate).put("beatSeconds",beatSeconds).put("musicCrossfade",musicCrossfade)
             .put("automaticDucking",automaticDucking).put("autoRotateVideos",autoRotateVideos);
     }
     static Project fromJson(JSONObject j) throws Exception {
@@ -62,6 +63,7 @@ final class Project {
         a=j.optJSONArray("stickers");if(a!=null)for(int i=0;i<a.length();i++)p.stickers.add(Sticker.fromJson(a.getJSONObject(i)));
         p.timelineZoom=Math.max(.65,Math.min(2.5,j.optDouble("timelineZoom",1)));
         p.filmTemplate=j.optString("filmTemplate","Familie");p.beatSeconds=j.optDouble("beatSeconds",0);
+        p.musicCrossfade=j.optDouble("musicCrossfade",.4);
         p.automaticDucking=j.optBoolean("automaticDucking",true);
         p.autoRotateVideos=j.optBoolean("autoRotateVideos",true);return p;
     }

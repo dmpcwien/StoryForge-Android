@@ -51,3 +51,16 @@ jobs:
           else
             gh release create v1.0.0-debug StoryForge-v1.0.0-debug.apk --title "StoryForge 1.0.0 – Test-APK" --notes "Debug-Version zum Testen. Für spätere Updates ist eine dauerhafte Signatur erforderlich."
           fi
+
+      - name: Record APK build result
+        if: always()
+        env:
+          RUN_RESULT: ${{ job.status }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          printf 'StoryForge APK Build: %s\nRun: https://github.com/dmpcwien/StoryForge-Android/actions/runs/%s\n' "$RUN_RESULT" "$RUN_ID" > BUILD-STATUS.md
+          git pull --rebase origin main
+          git add BUILD-STATUS.md
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Record APK build result [skip ci]' || true
+          git push origin HEAD:main

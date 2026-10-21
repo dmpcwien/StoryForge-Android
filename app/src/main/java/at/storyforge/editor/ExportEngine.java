@@ -104,6 +104,7 @@ final class ExportEngine {
         if("16:9".equals(p.aspect))ratio=16.0/9;
         else if("9:16".equals(p.aspect))ratio=9.0/16;
         else if("1:1".equals(p.aspect))ratio=1;
+        else if("4:5".equals(p.aspect))ratio=.8;
         int max=p.maxSize==720?1280:p.maxSize==2160?3840:1920;
         int longSide=even(Math.min(max,longest));
         // Do not upscale beyond the largest imported source's pixel dimensions.

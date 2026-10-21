@@ -41,3 +41,13 @@ jobs:
           name: StoryForge-debug-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Publish test APK as GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk StoryForge-v1.0.0-debug.apk
+          if gh release view v1.0.0-debug >/dev/null 2>&1; then
+            gh release upload v1.0.0-debug StoryForge-v1.0.0-debug.apk --clobber
+          else
+            gh release create v1.0.0-debug StoryForge-v1.0.0-debug.apk --title "StoryForge 1.0.0 – Test-APK" --notes "Debug-Version zum Testen. Für spätere Updates ist eine dauerhafte Signatur erforderlich."
+          fi

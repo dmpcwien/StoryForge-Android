@@ -57,7 +57,7 @@ import java.util.concurrent.Executors;
 
 /** Touch-first editor, persistent projects, native offline export. */
 public final class MainActivity extends Activity {
-    private static final int PICK_MEDIA=410,PICK_MUSIC=411,PICK_AUTO_MEDIA=412,PICK_AUTO_MUSIC=413,PICK_STICKER=414,PICK_LAYER_AUDIO=415;
+    private static final int PICK_MEDIA=410,PICK_MUSIC=411,PICK_AUTO_MEDIA=412,PICK_AUTO_MUSIC=413,PICK_STICKER=414,PICK_LAYER_AUDIO=415,PICK_PLAYLIST=416;
     private static final int BG=0xFF0D0F13, SURFACE=0xFF1A1D24,
         SURFACE_2=0xFF292E39,PURPLE=0xFF9A78FF,
         CYAN=0xFF85DCE1, WHITE=0xFFF5F6FA, MUTED=0xFFA4ACB9;
@@ -80,7 +80,8 @@ public final class MainActivity extends Activity {
     private ExportEngine exporter;
     private Uri latestExport;
     private boolean playing=false;
-    private MediaPlayer musicPreview;
+    private MediaPlayer musicPreview,playlistPreview;
+    private int currentPlaylistIndex=-1;
     private int previewIndex=0;
     private long previewStartedAt=0;
     private long previewElapsedOffsetMs=0;
@@ -210,7 +211,8 @@ public final class MainActivity extends Activity {
         screen.addView(aux,margin(-1,-2,8));
 
         LinearLayout audioHeading=horizontal();audioHeading.addView(text("♫  AUDIOSPUREN",11,CYAN,true),new LinearLayout.LayoutParams(0,-2,1));
-        audioHeading.addView(pill("+ Musik/SFX",SURFACE_2,this::pickLayerAudio),lp(116,-2));
+        audioHeading.addView(pill("Playlist +",0xFF393052,this::pickPlaylist),lp(97,-2));
+        audioHeading.addView(pill("SFX +",SURFACE_2,this::pickLayerAudio),lp(74,-2));
         screen.addView(audioHeading,margin(-1,-2,14));
         audioList=vertical();screen.addView(audioList,margin(-1,-2,7));
         screen.addView(text("▧  BILD-OVERLAYS",11,CYAN,true),margin(-1,-2,14));
@@ -284,12 +286,19 @@ public final class MainActivity extends Activity {
         }
         if(audioList!=null){
             audioList.removeAllViews();
-            if(project.audioTracks.isEmpty())audioList.addView(text("Noch keine zusätzliche Audiospur.",11,MUTED,false));
+            if(project.audioTracks.isEmpty())audioList.addView(text("Playlist + fügt mehrere Lieder hintereinander ein.",11,MUTED,false));
+            int songNumber=0;
             for(int i=0;i<project.audioTracks.size();i++){
                 final int at=i;Project.AudioTrack a=project.audioTracks.get(i);
                 LinearLayout row=horizontal();
-                row.addView(text("♫  "+a.name+"  ·  "+time(a.start),12,WHITE,false),new LinearLayout.LayoutParams(0,-2,1));
-                row.addView(pill("Bearbeiten",SURFACE_2,()->editAudio(at)),lp(90,-2));
+                if(a.sequential) songNumber++;
+                row.addView(text((a.sequential?"♫ "+songNumber+". ":"♪ ")+a.name+"  ·  "+time(a.start),12,a.sequential?CYAN:WHITE,false),
+                    new LinearLayout.LayoutParams(0,-2,1));
+                if(a.sequential) {
+                    row.addView(pill("↑",SURFACE_2,()->movePlaylist(at,-1)),lp(33,-2));
+                    row.addView(pill("↓",SURFACE_2,()->movePlaylist(at,1)),lp(33,-2));
+                }
+                row.addView(pill("Ändern",SURFACE_2,()->editAudio(at)),lp(77,-2));
                 audioList.addView(row,margin(-1,-2,6));
             }
         }
@@ -306,7 +315,7 @@ public final class MainActivity extends Activity {
         if(!playing)showSelected();
     }
     private Bitmap thumbnail(Project.Clip c){
-        String key=c.path+":"+c.start;
+        String key=c.path+":"+c.start+":"+c.rotationDegrees;
         Bitmap cached=thumbCache.get(key);
         if(cached!=null)return cached;
         Bitmap raw;
@@ -319,6 +328,11 @@ public final class MainActivity extends Activity {
             finally{try{r.release();}catch(Exception ignored){}}
         }
         if(raw==null)return null;
+        if(c.image && c.rotationDegrees!=0){
+            Bitmap oriented=PhotoOrientation.rotate(raw,c.rotationDegrees);
+            if(oriented!=raw)raw.recycle();
+            raw=oriented;
+        }
         Bitmap scaled=Bitmap.createScaledBitmap(raw,200,130,true);
         if(raw!=scaled)raw.recycle();
         thumbCache.put(key,scaled);return scaled;
@@ -334,13 +348,20 @@ public final class MainActivity extends Activity {
     private void showClip(int index,boolean autoPlay){
         if(index<0||index>=project.clips.size())return;
         Project.Clip c=project.clips.get(index);
-        previewLabel.setText((index+1)+" / "+project.clips.size()+"     "+time(c.length()));
+        previewLabel.setText((index+1)+" / "+project.clips.size()+"     "+time(c.length())
+            +(c.image&&c.rotationDegrees!=0?"  ↻ "+c.rotationDegrees+"°":""));
         if(c.image){
             try{previewVideo.stopPlayback();}catch(Exception ignored){}
             previewVideo.setVisibility(View.GONE);previewImage.setVisibility(View.VISIBLE);
             BitmapFactory.Options o=new BitmapFactory.Options();o.inJustDecodeBounds=true;BitmapFactory.decodeFile(c.path,o);
             o.inSampleSize=Math.max(1,Math.max(o.outWidth/1400,o.outHeight/1400));o.inJustDecodeBounds=false;
-            previewImage.setImageBitmap(BitmapFactory.decodeFile(c.path,o));
+            Bitmap image=BitmapFactory.decodeFile(c.path,o);
+            if(image!=null && c.rotationDegrees!=0) {
+                Bitmap corrected=PhotoOrientation.rotate(image,c.rotationDegrees);
+                if(corrected!=image)image.recycle();
+                image=corrected;
+            }
+            previewImage.setImageBitmap(image);
         }else{
             previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
             previewVideo.setVideoPath(c.path);
@@ -363,6 +384,38 @@ public final class MainActivity extends Activity {
         Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");i.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/*","video/*"});
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);startActivityForResult(i,PICK_MEDIA);
+    }
+    private void pickPlaylist(){
+        Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("audio/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
+        startActivityForResult(i,PICK_PLAYLIST);
+    }
+    private void reflowPlaylist(){
+        double cursor=0;
+        for(Project.AudioTrack song:project.audioTracks){
+            if(!song.sequential)continue;
+            song.start=cursor;
+            cursor+=Math.max(.1,song.end-song.offset);
+        }
+    }
+    private void movePlaylist(int index,int direction){
+        int neighbour=index+direction;
+        while(neighbour>=0 && neighbour<project.audioTracks.size()
+                && !project.audioTracks.get(neighbour).sequential)neighbour+=direction;
+        if(neighbour<0||neighbour>=project.audioTracks.size())return;
+        java.util.Collections.swap(project.audioTracks,index,neighbour);
+        reflowPlaylist();saveProject();refresh();
+    }
+    private double audioDuration(String path){
+        MediaMetadataRetriever meta=new MediaMetadataRetriever();
+        try{
+            meta.setDataSource(path);
+            String duration=meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            return duration==null?120:Math.max(.1,Double.parseDouble(duration)/1000);
+        }catch(Exception ignored){return 120;}
+        finally{try{meta.release();}catch(Exception ignored){}}
     }
     private void pickLayerAudio(){
         Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -418,7 +471,7 @@ public final class MainActivity extends Activity {
             for(Uri u:all){
                 try{
                     String mime=getContentResolver().getType(u);
-                    boolean music=request==PICK_MUSIC||request==PICK_LAYER_AUDIO||request==PICK_AUTO_MUSIC;
+                    boolean music=request==PICK_MUSIC||request==PICK_LAYER_AUDIO||request==PICK_AUTO_MUSIC||request==PICK_PLAYLIST;
                     String name=fileName(u);
                     String lower=name.toLowerCase(Locale.ROOT);
                     boolean image=request==PICK_STICKER || (!music && ((mime!=null&&mime.startsWith("image/")) ||
@@ -434,19 +487,32 @@ public final class MainActivity extends Activity {
                         if(request==PICK_MUSIC){project.musicPath=copy.getAbsolutePath();project.musicName=name;}
                         else {
                             Project.AudioTrack a=new Project.AudioTrack();a.path=copy.getAbsolutePath();a.name=name;
-                            MediaMetadataRetriever meta=new MediaMetadataRetriever();
-                            try{meta.setDataSource(a.path);String duration=meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                                a.end=duration==null?120:Double.parseDouble(duration)/1000d;
-                            }finally{meta.release();}
+                            a.end=audioDuration(a.path);
+                            if(request==PICK_PLAYLIST){
+                                if(!project.musicPath.isEmpty()){
+                                    Project.AudioTrack prev=new Project.AudioTrack();
+                                    prev.path=project.musicPath;prev.name=project.musicName;
+                                    prev.end=audioDuration(prev.path);prev.sequential=true;
+                                    project.audioTracks.add(0,prev);
+                                    project.musicPath="";project.musicName="";
+                                }
+                                a.sequential=true;
+                            }
                             if(request==PICK_AUTO_MUSIC){
                                 for(Project.AudioTrack old:project.audioTracks)
                                     a.start=Math.max(a.start,old.start+old.end-old.offset);
                             }
                             project.audioTracks.add(a);
+                            if(request==PICK_PLAYLIST)reflowPlaylist();
                         }
                     } else{
                         Project.Clip c=new Project.Clip();c.path=copy.getAbsolutePath();c.name=name;c.image=image;
-                        if(image){c.sourceDuration=4;c.end=4;}
+                        if(image){
+                            c.sourceDuration=4;c.end=4;
+                            PhotoOrientation.Result orientation=PhotoOrientation.inspect(c.path);
+                            c.rotationDegrees=orientation.degrees;
+                            c.rotationSource=orientation.source;
+                        }
                         else{
                             MediaMetadataRetriever r=new MediaMetadataRetriever();
                             try{r.setDataSource(c.path);
@@ -469,6 +535,7 @@ public final class MainActivity extends Activity {
                 loading.setVisibility(View.GONE);refresh();
                 if(request==PICK_AUTO_MEDIA&&autoRequested){if(added>0)openAutoMusicPicker();else{autoRequested=false;toast("Keine Medien importiert.");}}
                 if(request==PICK_AUTO_MUSIC&&autoRequested)applyAutoFilm();
+                if(request==PICK_PLAYLIST&&added>0)toast("Playlist erstellt. Mit ↑ ↓ kannst du die Reihenfolge ändern.");
                 Toast.makeText(this,added+" Datei(en) übernommen"+(issue!=null?" · Fehler: "+issue:""),Toast.LENGTH_LONG).show();
             });
         });
@@ -603,12 +670,13 @@ public final class MainActivity extends Activity {
             .setPositiveButton("Speichern",(d,w)->{
                 try{double st=parse(start),off=parse(offset),en=parse(end);
                     if(st<0||off<0||en<=off)throw new Exception();
-                    a.start=st;a.offset=off;a.end=en;
+                    a.start=a.sequential?a.start:st;a.offset=off;a.end=en;
                     a.volume=Math.max(0,Math.min(1.5,parse(volume)));
                     a.fadeIn=Math.max(0,parse(fadeIn));a.fadeOut=Math.max(0,parse(fadeOut));
+                    if(a.sequential)reflowPlaylist();
                     saveProject();refresh();
                 }catch(Exception ex){toast("Ungültige Audiozeiten.");}
-            }).setNeutralButton("Löschen",(d,w)->{project.audioTracks.remove(index);saveProject();refresh();})
+            }).setNeutralButton("Löschen",(d,w)->{project.audioTracks.remove(index);reflowPlaylist();saveProject();refresh();})
             .setNegativeButton("Abbrechen",null).show();
     }
     private void editSticker(int index){
@@ -630,12 +698,33 @@ public final class MainActivity extends Activity {
     private void editSelected(){
         if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}
         Project.Clip c=project.clips.get(selected);
-        String[] actions={c.image?"Anzeigedauer festlegen":"Anfang und Ende kürzen","Nach links verschieben","Nach rechts verschieben","Clip entfernen"};
+        String[] actions=c.image
+            ? new String[]{"Anzeigedauer festlegen","Nach links verschieben","Nach rechts verschieben",
+                "Bild 90° nach rechts drehen","Bild 90° nach links drehen","Bild um 180° drehen",
+                "Bildausrichtung erneut prüfen","Clip entfernen"}
+            : new String[]{"Anfang und Ende kürzen","Nach links verschieben","Nach rechts verschieben","Clip entfernen"};
         new AlertDialog.Builder(this).setTitle(c.name).setItems(actions,(dialog,which)->{
             if(which==0)clipTimingDialog(c);
             if(which==1&&selected>0){java.util.Collections.swap(project.clips,selected,selected-1);selected--;saveProject();refresh();}
             if(which==2&&selected<project.clips.size()-1){java.util.Collections.swap(project.clips,selected,selected+1);selected++;saveProject();refresh();}
-            if(which==3)new AlertDialog.Builder(this).setTitle("Clip entfernen?")
+            if(c.image && which>=3 && which<=5){
+                int delta=which==3?90:which==4?270:180;
+                c.rotationDegrees=(c.rotationDegrees+delta)%360;
+                c.rotationSource="Manuell";
+                thumbCache.evictAll();saveProject();refresh();
+            }
+            if(c.image && which==6){
+                loading.setVisibility(View.VISIBLE);
+                fileQueue.execute(()->{
+                    PhotoOrientation.Result orientation=PhotoOrientation.inspect(c.path);
+                    runOnUiThread(()->{
+                        c.rotationDegrees=orientation.degrees;c.rotationSource=orientation.source;
+                        thumbCache.evictAll();loading.setVisibility(View.GONE);saveProject();refresh();
+                        toast(orientation.source.isEmpty()?"Keine eindeutige Ausrichtung erkannt. Bitte manuell drehen.":"Ausrichtung: "+orientation.source);
+                    });
+                });
+            }
+            if(which==(c.image?7:3))new AlertDialog.Builder(this).setTitle("Clip entfernen?")
                 .setMessage("Das Original bleibt auf dem Smartphone gespeichert.")
                 .setPositiveButton("Entfernen",(d,w)->{project.clips.remove(selected);selected=Math.max(0,selected-1);saveProject();refresh();})
                 .setNegativeButton("Abbrechen",null).show();

@@ -47,15 +47,23 @@ final class ExportEngine {
         canceled=true;
         if(sessionId!=-1) FFmpegKit.cancel(sessionId);
     }
-    void start(Project project, Listener listener) {
+    void start(Project project, Listener listener){startInternal(project,listener,true);}
+    void startPreview(Project project, Listener listener){startInternal(project,listener,false);}
+    private void startInternal(Project project, Listener listener,boolean publish){
         canceled=false;
         new Thread(() -> {
             try {
                 if(project.clips.isEmpty())throw new IllegalStateException("Bitte mindestens ein Foto oder Video auswählen.");
                 File dir=new File(ctx.getCacheDir(),"exports");
                 if(!dir.exists()&&!dir.mkdirs())throw new Exception("Exportordner konnte nicht angelegt werden.");
-                File out=new File(dir,"StoryForge_"+System.currentTimeMillis()+".mp4");
-                List<String> args=buildCommand(project,out,dir);
+                if(!publish) {
+                    project=Project.fromJson(project.toJson());
+                    project.maxSize=720;project.fps=30;
+                    while(project.clips.size()>5)project.clips.remove(project.clips.size()-1);
+                }
+                final Project rendering=project;
+                File out=new File(dir,(publish?"StoryForge_":"StoryForge_preview_")+System.currentTimeMillis()+".mp4");
+                List<String> args=buildCommand(rendering,out,dir);
                 if(canceled)return;
                 main.post(()->listener.progress(0));
                 FFmpegSession session=FFmpegKit.executeWithArgumentsAsync(args.toArray(new String[0]), result -> {
@@ -63,7 +71,7 @@ final class ExportEngine {
                     if (canceled)return;
                     if(ReturnCode.isSuccess(result.getReturnCode()) && out.exists() && out.length()>0) {
                         try {
-                            Uri gallery=publishVideo(out);
+                            Uri gallery=publish?publishVideo(out):Uri.fromFile(out);
                             main.post(()->listener.success(gallery,out));
                         } catch(Exception ex) {
                             main.post(()->listener.failed("MP4 erstellt, aber Speichern in Galerie fehlgeschlagen: "+ex.getMessage()));
@@ -79,7 +87,7 @@ final class ExportEngine {
                     }
                 }, log->{}, stats -> {
                     if(canceled)return;
-                    double durationMs=project.duration()*1000.0;
+                    double durationMs=rendering.duration()*1000.0;
                     int percentage=Math.max(0,Math.min(99,(int)Math.round(stats.getTime()*100.0/Math.max(1,durationMs))));
                     main.post(()->listener.progress(percentage));
                 });
@@ -264,8 +272,15 @@ final class ExportEngine {
             filter.append("[").append(musicIndex).append(":a]aresample=48000,aformat=channel_layouts=stereo,")
                 .append("volume=").append(n(p.musicVolume)).append(",atrim=duration=").append(n(joined))
                 .append(",asetpts=PTS-STARTPTS[musicvol];\n");
-            filter.append("[originalvol][musicvol]amix=inputs=2:duration=first:dropout_transition=0[")
-                .append(aout).append("]");
+            if(p.automaticDucking){
+                filter.append("[musicvol]asplit=2[musicSide][musicMix];\n");
+                filter.append("[originalvol][musicSide]sidechaincompress=threshold=0.065:ratio=5:attack=20:release=300[ducked];\n");
+                filter.append("[ducked][musicMix]amix=inputs=2:duration=first:dropout_transition=0[")
+                    .append(aout).append("]");
+            }else{
+                filter.append("[originalvol][musicvol]amix=inputs=2:duration=first:dropout_transition=0[")
+                    .append(aout).append("]");
+            }
         }else{
             filter.append("[").append(a).append("]volume=").append(n(p.originalVolume)).append("[").append(aout).append("]");
         }
@@ -285,8 +300,18 @@ final class ExportEngine {
                 .append(":d=").append(n(Math.min(t.fadeOut,clipLen/2)));
             long ms=Math.max(0,Math.round(t.start*1000));
             filter.append(",adelay=").append(ms).append("|").append(ms).append("[").append(tr).append("];\n");
-            filter.append("[").append(aout).append("][").append(tr)
-                .append("]amix=inputs=2:duration=first:dropout_transition=0[").append(next).append("];\n");
+            if(p.automaticDucking && t.sequential){
+                filter.append("[").append(tr).append("]asplit=2[").append(tr).append("side][")
+                    .append(tr).append("mix];\n");
+                filter.append("[").append(aout).append("][").append(tr).append("side]")
+                    .append("sidechaincompress=threshold=0.07:ratio=4:attack=20:release=250[")
+                    .append(tr).append("duck];\n");
+                filter.append("[").append(tr).append("duck][").append(tr)
+                    .append("mix]amix=inputs=2:duration=first:dropout_transition=0[").append(next).append("];\n");
+            }else{
+                filter.append("[").append(aout).append("][").append(tr)
+                    .append("]amix=inputs=2:duration=first:dropout_transition=0[").append(next).append("];\n");
+            }
             aout=next;
         }
         if(filter.length()>1 && filter.charAt(filter.length()-2)==';')filter.setLength(filter.length()-2);

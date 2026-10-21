@@ -901,30 +901,76 @@ public final class MainActivity extends Activity {
             }).setNegativeButton("Abbrechen",null).show();
     }
     private void startExport(){
-        if(project.clips.isEmpty()){toast("Bitte erst Fotos oder Videos hinzufügen.");return;}
-        if(exportDialog!=null&&exportDialog.isShowing())return;
-        LinearLayout l=vertical();l.setPadding(dp(22),dp(17),dp(22),dp(13));
-        TextView percent=text("Export wird vorbereitet …",16,0xFF303046,true);
-        ProgressBar bar=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);bar.setMax(100);
-        l.addView(percent);l.addView(bar,margin(-1,8,16));
-        l.addView(text("Das fertige MP4 wird automatisch unter Filme / StoryForge gespeichert.",12,0xFFA1A6BD,false));
-        exportDialog=new AlertDialog.Builder(this).setTitle("MP4 wird erstellt").setView(l)
-            .setNegativeButton("Abbrechen",(d,w)->{exporter.cancel();toast("Export abgebrochen.");})
-            .setCancelable(false).create();exportDialog.show();
-        exporter.start(project,new ExportEngine.Listener(){
-            @Override public void progress(int value){bar.setProgress(value);percent.setText(value+" % gerendert");}
+        if(project.clips.isEmpty()){toast("Bitte zuerst Fotos oder Videos hinzufügen.");return;}
+        try{
+            saveProject();
+            java.nio.file.Files.write(new File(getFilesDir(),"export-pending.json").toPath(),
+                project.toJson().toString().getBytes(StandardCharsets.UTF_8));
+            Intent intent=new Intent(this,ExportService.class).setAction(ExportService.START);
+            startForegroundService(intent);
+            toast("Export im Hintergrund gestartet. Fortschritt in den Benachrichtigungen.");
+        }catch(Exception ex){
+            new AlertDialog.Builder(this).setTitle("Export nicht gestartet")
+                .setMessage(ex.getMessage()).setPositiveButton("OK",null).show();
+        }
+    }
+    private void showExportStatus(){
+        try{
+            File file=new File(getFilesDir(),"export-status.json");
+            if(!file.exists()){toast("Bisher kein Hintergrundexport.");return;}
+            JSONObject status=new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));
+            new AlertDialog.Builder(this).setTitle("Exportstatus · "+status.optString("state"))
+                .setMessage(status.optInt("progress",0)+" %\n"+status.optString("message"))
+                .setPositiveButton("OK",null).show();
+        }catch(Exception e){toast("Exportstatus nicht verfügbar.");}
+    }
+    private void renderEffectPreview(){
+        if(project.clips.isEmpty()){toast("Bitte zuerst Medien importieren.");return;}
+        if(loading.getVisibility()==View.VISIBLE){toast("Bereits eine Bearbeitung aktiv.");return;}
+        loading.setVisibility(View.VISIBLE);
+        previewRenderer.startPreview(project,new ExportEngine.Listener(){
+            @Override public void progress(int value){if(previewLabel!=null)previewLabel.setText("Effektvorschau · "+value+" %");}
             @Override public void success(Uri uri,File file){
-                exportDialog.dismiss();latestExport=uri;refresh();
-                new AlertDialog.Builder(MainActivity.this).setTitle("✓ Video gespeichert")
-                    .setMessage("Dein Video wurde in der Galerie unter Filme / StoryForge gespeichert.\n\n"+file.getName())
-                    .setPositiveButton("Teilen",(d,w)->share(uri))
-                    .setNegativeButton("Fertig",null).show();
+                loading.setVisibility(View.GONE);
+                stopPreview();
+                previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
+                previewVideo.setOnPreparedListener(player->player.start());
+                previewVideo.setVideoPath(file.getAbsolutePath());
+                previewVideo.start();
+                toast("Gerenderte Vorschau: erste fünf Szenen.");
             }
-            @Override public void failed(String err){
-                exportDialog.dismiss();new AlertDialog.Builder(MainActivity.this).setTitle("Export fehlgeschlagen")
-                    .setMessage(err).setPositiveButton("OK",null).show();
+            @Override public void failed(String error){
+                loading.setVisibility(View.GONE);
+                new AlertDialog.Builder(MainActivity.this).setTitle("Effektvorschau fehlgeschlagen")
+                    .setMessage(error).setPositiveButton("OK",null).show();
             }
         });
+    }
+    private void saveBackup(){
+        if(project.clips.isEmpty()){toast("Bitte zuerst ein Projekt erstellen.");return;}
+        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("application/zip");
+        i.putExtra(Intent.EXTRA_TITLE,"StoryForge-Backup-"+System.currentTimeMillis()+".zip");
+        startActivityForResult(i,PICK_BACKUP_SAVE);
+    }
+    private void loadBackup(){
+        new AlertDialog.Builder(this).setTitle("Projektsicherung wiederherstellen?")
+            .setMessage("Das aktuelle Projekt wird ersetzt. Du kannst es vorher als ZIP sichern.")
+            .setPositiveButton("ZIP auswählen",(d,w)->{
+                Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("application/zip");
+                startActivityForResult(i,PICK_BACKUP_LOAD);
+            }).setNegativeButton("Abbrechen",null).show();
+    }
+    private void undoProject(){
+        try{stopPreview();project=ProjectHistory.travel(getFilesDir(),true);selected=0;refresh();}
+        catch(Exception ex){toast(ex.getMessage());}
+    }
+    private void redoProject(){
+        try{stopPreview();project=ProjectHistory.travel(getFilesDir(),false);selected=0;refresh();}
+        catch(Exception ex){toast(ex.getMessage());}
     }
     private void share(Uri uri){
         Intent share=new Intent(Intent.ACTION_SEND);share.setType("video/mp4");share.putExtra(Intent.EXTRA_STREAM,uri);
@@ -1009,11 +1055,10 @@ public final class MainActivity extends Activity {
     private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_SHORT).show();}
     private File projectFile(){return new File(getFilesDir(),"project.json");}
     private synchronized void saveProject(){
-        try{byte[] data=project.toJson().toString(2).getBytes(StandardCharsets.UTF_8);
-            File next=new File(getFilesDir(),"project.next");try(FileOutputStream f=new FileOutputStream(next)){f.write(data);f.getFD().sync();}
-            if(!next.renameTo(projectFile())){
-                try(FileOutputStream output=new FileOutputStream(projectFile())){output.write(data);}next.delete();
-            }
+        try{
+            byte[] data=project.toJson().toString(2).getBytes(StandardCharsets.UTF_8);
+            ProjectHistory.saveSnapshot(getFilesDir(),projectFile(),data);
+            ProjectHistory.atomicWrite(projectFile(),data);
         }catch(Exception ex){android.util.Log.e("StoryForge","Projekt speichern",ex);}
     }
     private void loadProject(){

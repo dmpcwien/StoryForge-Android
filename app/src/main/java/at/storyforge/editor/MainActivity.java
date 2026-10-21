@@ -57,7 +57,7 @@ import java.util.concurrent.Executors;
 
 /** Touch-first editor, persistent projects, native offline export. */
 public final class MainActivity extends Activity {
-    private static final int PICK_MEDIA=410,PICK_MUSIC=411,PICK_AUTO_MEDIA=412,PICK_AUTO_MUSIC=413,PICK_STICKER=414,PICK_LAYER_AUDIO=415,PICK_PLAYLIST=416;
+    private static final int PICK_MEDIA=410,PICK_MUSIC=411,PICK_AUTO_MEDIA=412,PICK_AUTO_MUSIC=413,PICK_STICKER=414,PICK_LAYER_AUDIO=415,PICK_PLAYLIST=416,PICK_BACKUP_SAVE=417,PICK_BACKUP_LOAD=418;
     private static final int BG=0xFF0D0F13, SURFACE=0xFF1A1D24,
         SURFACE_2=0xFF292E39,PURPLE=0xFF9A78FF,
         CYAN=0xFF85DCE1, WHITE=0xFFF5F6FA, MUTED=0xFFA4ACB9;
@@ -77,7 +77,8 @@ public final class MainActivity extends Activity {
     private TextView previewLabel,previewText,totalLabel,musicLabel,selectionLabel,playButton;
     private ProgressBar loading;
     private AlertDialog exportDialog;
-    private ExportEngine exporter;
+    private ExportEngine exporter,previewRenderer;
+    private boolean historyRestoring=false;
     private Uri latestExport;
     private boolean playing=false;
     private MediaPlayer musicPreview,playlistPreview;
@@ -90,8 +91,10 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle b){
         super.onCreate(b);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
         getWindow().getDecorView().setSystemUiVisibility(0);
-        loadProject();exporter=new ExportEngine(this);
+        loadProject();exporter=new ExportEngine(this);previewRenderer=new ExportEngine(this);
         buildUi();refresh();
+        if(android.os.Build.VERSION.SDK_INT>=33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},101);
     }
     private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     private TextView text(String s,float sp,int color,boolean bold){
@@ -157,6 +160,11 @@ public final class MainActivity extends Activity {
         totalLabel=text("00:00 / 00:00",12,MUTED,false);totalLabel.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
         transport.addView(totalLabel,new LinearLayout.LayoutParams(0,dp(43),1));
         screen.addView(transport);
+        LinearLayout tools=horizontal();
+        tools.addView(pill("◉ Effektvorschau",SURFACE,this::renderEffectPreview),new LinearLayout.LayoutParams(0,-2,1));
+        TextView status=pill("▤ Exportstatus",SURFACE,this::showExportStatus);
+        LinearLayout.LayoutParams st=new LinearLayout.LayoutParams(0,-2,1);st.leftMargin=dp(8);tools.addView(status,st);
+        screen.addView(tools,margin(-1,-2,8));
 
         LinearLayout header=horizontal();TextView tl=text("ZEITLEISTE",11,CYAN,true);tl.setLetterSpacing(.12f);
         header.addView(tl,new LinearLayout.LayoutParams(0,-2,1));
@@ -183,6 +191,15 @@ public final class MainActivity extends Activity {
         screen.addView(auto,margin(-1,47,7));
         TextView undoAuto=pill("↶ Letzten automatischen Schnitt rückgängig",SURFACE,this::undoAutoFilm);
         screen.addView(undoAuto,margin(-1,-2,5));
+        LinearLayout toolHistory=horizontal();
+        toolHistory.addView(pill("↶ Rückgängig",SURFACE,this::undoProject),new LinearLayout.LayoutParams(0,-2,1));
+        TextView redo=pill("↷ Wiederholen",SURFACE,this::redoProject);
+        LinearLayout.LayoutParams rdo=new LinearLayout.LayoutParams(0,-2,1);rdo.leftMargin=dp(6);toolHistory.addView(redo,rdo);
+        TextView backup=pill("⤓ Backup",SURFACE,this::saveBackup);
+        LinearLayout.LayoutParams bkp=new LinearLayout.LayoutParams(0,-2,1);bkp.leftMargin=dp(6);toolHistory.addView(backup,bkp);
+        TextView restore=pill("⤒ Laden",SURFACE,this::loadBackup);
+        LinearLayout.LayoutParams rst=new LinearLayout.LayoutParams(0,-2,1);rst.leftMargin=dp(6);toolHistory.addView(restore,rst);
+        screen.addView(toolHistory,margin(-1,-2,8));
         LinearLayout row2=horizontal();
         row2.addView(pill("⇄ Übergang",SURFACE,this::chooseTransition),new LinearLayout.LayoutParams(0,-2,1));
         TextView addTitle=pill("T  Text",SURFACE,this::addCaption);
@@ -427,7 +444,7 @@ public final class MainActivity extends Activity {
     }
     private void startAutoWizard(){
         new AlertDialog.Builder(this).setTitle("Automatisch Film erstellen")
-            .setSingleChoiceItems(new String[]{"Sanft · Reise & Familie","Dynamisch · Musikvideo","Erinnerungen · Fotoalbum"},autoStyle,(d,which)->autoStyle=which)
+            .setSingleChoiceItems(SmartMontage.STYLES,SmartMontage.preset(project.filmTemplate),(d,which)->autoStyle=which)
             .setPositiveButton("Medien auswählen",(d,w)->{
                 autoStartClipCount=project.clips.size();autoRequested=true;
                 Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -459,6 +476,39 @@ public final class MainActivity extends Activity {
         if(result!=RESULT_OK||data==null){
             if(request==PICK_AUTO_MUSIC&&autoRequested)applyAutoFilm();
             if(request==PICK_AUTO_MEDIA)autoRequested=false;
+            return;
+        }
+        if(request==PICK_BACKUP_SAVE){
+            Uri target=data.getData();
+            if(target!=null){
+                loading.setVisibility(View.VISIBLE);
+                fileQueue.execute(()->{
+                    String message;
+                    try{ProjectBackup.write(this,project,target);message="Projekt inklusive Medien gesichert.";}
+                    catch(Exception ex){message="Backup-Fehler: "+ex.getMessage();}
+                    final String done=message;
+                    runOnUiThread(()->{loading.setVisibility(View.GONE);toast(done);});
+                });
+            }
+            return;
+        }
+        if(request==PICK_BACKUP_LOAD){
+            Uri target=data.getData();
+            if(target!=null){
+                loading.setVisibility(View.VISIBLE);
+                fileQueue.execute(()->{
+                    try{
+                        Project restored=ProjectBackup.read(this,target);
+                        runOnUiThread(()->{
+                            project=restored;selected=0;stopPreview();saveProject();refresh();
+                            loading.setVisibility(View.GONE);toast("Projektsicherung wiederhergestellt.");
+                        });
+                    }catch(Exception ex){
+                        String msg=ex.getMessage();
+                        runOnUiThread(()->{loading.setVisibility(View.GONE);toast("Sicherung ungültig: "+msg);});
+                    }
+                });
+            }
             return;
         }
         List<Uri> all=new ArrayList<>();

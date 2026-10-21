@@ -31,25 +31,60 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Configure persistent signing (optional)
+        shell: bash
+        env:
+          SF_KEYSTORE_B64: ${{ secrets.SF_KEYSTORE_B64 }}
+          SF_KEY_ALIAS: ${{ secrets.SF_KEY_ALIAS }}
+          SF_STORE_PASSWORD: ${{ secrets.SF_STORE_PASSWORD }}
+          SF_KEY_PASSWORD: ${{ secrets.SF_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$SF_KEYSTORE_B64" && -n "$SF_KEY_ALIAS" && -n "$SF_STORE_PASSWORD" && -n "$SF_KEY_PASSWORD" ]]; then
+            printf "%s" "$SF_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/storyforge-signing.jks"
+            chmod 600 "$RUNNER_TEMP/storyforge-signing.jks"
+            echo "SF_KEYSTORE_FILE=$RUNNER_TEMP/storyforge-signing.jks" >> "$GITHUB_ENV"
+            echo "SIGNING_MODE=stable" >> "$GITHUB_ENV"
+            echo "Signiere 1.3 mit festem Zertifikat."
+          else
+            echo "SIGNING_MODE=debug" >> "$GITHUB_ENV"
+            echo "::warning::Kein permanentes Signing konfiguriert. Debug-APK ist nicht garantiert updatefaehig."
+          fi
+      - name: Build Android APK
+        shell: bash
+        run: |
+          if [[ "$SIGNING_MODE" == "stable" ]]; then
+            gradle --no-daemon :app:assembleRelease
+            cp app/build/outputs/apk/release/app-release.apk StoryForge-v1.3.0.apk
+          else
+            gradle --no-daemon :app:assembleDebug
+            cp app/build/outputs/apk/debug/app-debug.apk StoryForge-v1.3.0.apk
+          fi
+          test -s StoryForge-v1.3.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose StoryForge-v1.3.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging StoryForge-v1.3.0.apk | head -n 3
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: StoryForge-debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: StoryForge-1.3-APK
+          path: StoryForge-v1.3.0.apk
           if-no-files-found: error
-      - name: Publish test APK as GitHub release
+      - name: Publish GitHub release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk StoryForge-v1.2.0-debug.apk
-          if gh release view v1.2.0-debug >/dev/null 2>&1; then
-            gh release upload v1.2.0-debug StoryForge-v1.2.0-debug.apk --clobber
+          if [[ "$SIGNING_MODE" == "stable" ]]; then
+            TAG=v1.3.0-signed
+            NOTES="StoryForge 1.3 mit einem dauerhaft konfigurierten Zertifikat signiert. Updates funktionieren nur bei gleicher Signatur wie die installierte App."
           else
-            gh release create v1.2.0-debug StoryForge-v1.2.0-debug.apk --title "StoryForge 1.2.0 – Test-APK" --notes "Debug-Testversion: Playlist mit mehreren Liedern, automatische Foto-Ausrichtung. Für Updates auf bestehende APKs dauerhaftes Zertifikat erforderlich."
+            TAG=v1.3.0-debug
+            NOTES="StoryForge 1.3 Test-APK mit temporaerer GitHub Debug-Signatur. Bestehende Installation vorerst nicht loeschen; lokale Projekt-Backups sichern!"
           fi
-
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" StoryForge-v1.3.0.apk --clobber
+          else
+            gh release create "$TAG" StoryForge-v1.3.0.apk --title "StoryForge 1.3.0 ($SIGNING_MODE)" --notes "$NOTES"
+          fi
       - name: Record APK build result
         if: always()
         env:

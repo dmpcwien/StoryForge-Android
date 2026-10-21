@@ -900,6 +900,7 @@ public final class MainActivity extends Activity {
             for(Project.Caption caption:project.captions)if(global>=caption.start&&global<=caption.end){title=caption.text;break;}
             previewText.setText(title);
             totalLabel.setText(time(global)+" / "+time(project.duration()));
+            syncPlaylistPreview(global);
             if(elapsed>=c.length()*1000){
                 previewElapsedOffsetMs+=(long)(c.length()*1000);
                 previewIndex++;
@@ -915,12 +916,45 @@ public final class MainActivity extends Activity {
         previewStartedAt=SystemClock.elapsedRealtime();
         showClip(previewIndex,true);
     }
+    private void syncPlaylistPreview(double position){
+        int songIndex=-1;
+        for(int i=0;i<project.audioTracks.size();i++){
+            Project.AudioTrack a=project.audioTracks.get(i);
+            if(a.sequential && position>=a.start && position<a.start+Math.max(0,a.end-a.offset)){
+                songIndex=i;break;
+            }
+        }
+        if(songIndex==currentPlaylistIndex)return;
+        releasePlaylistPreview();
+        if(songIndex<0)return;
+        Project.AudioTrack a=project.audioTracks.get(songIndex);
+        try{
+            MediaPlayer player=new MediaPlayer();
+            player.setDataSource(a.path);
+            player.setVolume((float)a.volume,(float)a.volume);
+            player.prepare();
+            int fromMs=(int)Math.max(0,Math.min(2_000_000_000,(position-a.start+a.offset)*1000));
+            player.seekTo(fromMs);
+            player.start();
+            playlistPreview=player;
+            currentPlaylistIndex=songIndex;
+        }catch(Exception ignored){releasePlaylistPreview();}
+    }
+    private void releasePlaylistPreview(){
+        currentPlaylistIndex=-1;
+        if(playlistPreview!=null){
+            try{playlistPreview.stop();}catch(Exception ignored){}
+            try{playlistPreview.release();}catch(Exception ignored){}
+            playlistPreview=null;
+        }
+    }
     private void releaseMusicPreview(){if(musicPreview!=null){try{musicPreview.release();}catch(Exception ignored){}musicPreview=null;}}
     private void stopPreview(){
         playing=false;
         if(playbackTick!=null)main.removeCallbacks(playbackTick);
         if(previewVideo!=null){try{previewVideo.stopPlayback();}catch(Exception ignored){}}
         releaseMusicPreview();
+        releasePlaylistPreview();
         if(playButton!=null)playButton.setText("▶ Film abspielen");
         if(totalLabel!=null)totalLabel.setText(project.clips.size()+" Clips   ·   "+time(project.duration()));
     }

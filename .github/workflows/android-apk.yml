@@ -43,11 +43,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk StoryForge-v1.1.0-debug.apk
-          if gh release view v1.1.0-debug >/dev/null 2>&1; then
-            gh release upload v1.1.0-debug StoryForge-v1.1.0-debug.apk --clobber
+          cp app/build/outputs/apk/debug/app-debug.apk StoryForge-v1.2.0-debug.apk
+          if gh release view v1.2.0-debug >/dev/null 2>&1; then
+            gh release upload v1.2.0-debug StoryForge-v1.2.0-debug.apk --clobber
           else
-            gh release create v1.1.0-debug StoryForge-v1.1.0-debug.apk --title "StoryForge 1.1.0 – Test-APK" --notes "Debug-Version zum Testen. Für spätere Updates ist eine dauerhafte Signatur erforderlich."
+            gh release create v1.2.0-debug StoryForge-v1.2.0-debug.apk --title "StoryForge 1.2.0 – Test-APK" --notes "Debug-Testversion: Playlist mit mehreren Liedern, automatische Foto-Ausrichtung. Für Updates auf bestehende APKs dauerhaftes Zertifikat erforderlich."
           fi
 
       - name: Record APK build result

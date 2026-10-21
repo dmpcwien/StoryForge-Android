@@ -1,5 +1,7 @@
 plugins { id 'com.android.application' }
 
+def storyforgeKeystore = System.getenv('SF_KEYSTORE_FILE')
+
 android {
     namespace 'at.storyforge.editor'
     compileSdk 35
@@ -11,7 +13,22 @@ android {
         versionCode 13
         versionName '1.3.0'
     }
-    buildTypes { release { minifyEnabled false } }
+    signingConfigs {
+        if (storyforgeKeystore) {
+            stableRelease {
+                storeFile file(storyforgeKeystore)
+                storePassword System.getenv('SF_STORE_PASSWORD')
+                keyAlias System.getenv('SF_KEY_ALIAS')
+                keyPassword System.getenv('SF_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (storyforgeKeystore) signingConfig signingConfigs.stableRelease
+        }
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17

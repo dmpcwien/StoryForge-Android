@@ -84,6 +84,8 @@ public final class MainActivity extends Activity {
     private boolean historyRestoring=false;
     private Uri latestExport;
     private boolean playing=false,previewPaused=false;
+    private boolean effectPreviewActive=false,effectPreviewPaused=false;
+    private File effectPreviewFile;
     private long pausedClipElapsedMs=0;
     private Dialog fullscreenDialog;
     private TextView fullscreenPauseButton;
@@ -1142,10 +1144,10 @@ public final class MainActivity extends Activity {
             @Override public void success(Uri uri,File file){
                 loading.setVisibility(View.GONE);
                 stopPreview();
-                previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
-                previewVideo.setOnPreparedListener(player->player.start());
-                previewVideo.setVideoPath(file.getAbsolutePath());
-                previewVideo.start();
+                effectPreviewFile=file;
+                effectPreviewActive=true;effectPreviewPaused=false;
+                showEffectPreviewAt(0);
+                refreshPreviewButtons();keepScreenAwake();
                 toast("Gerenderte Vorschau: erste fünf Szenen.");
             }
             @Override public void failed(String error){
@@ -1185,20 +1187,38 @@ public final class MainActivity extends Activity {
         Intent share=new Intent(Intent.ACTION_SEND);share.setType("video/mp4");share.putExtra(Intent.EXTRA_STREAM,uri);
         share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(share,"Video teilen"));
     }
+    private void showEffectPreviewAt(int seekMs){
+        if(effectPreviewFile==null)return;
+        previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
+        previewLabel.setText("GERENDERTE EFFEKTVORSCHAU");
+        previewVideo.setOnPreparedListener(player->{
+            previewVideo.seekTo(seekMs);
+            if(!effectPreviewPaused)previewVideo.start();
+        });
+        previewVideo.setOnCompletionListener(player->stopPreviewAndShowSelected());
+        previewVideo.setVideoPath(effectPreviewFile.getAbsolutePath());
+    }
     private void stopPreviewAndShowSelected(){
         stopPreview();showSelected();
     }
     private void refreshPreviewButtons(){
-        String state=!playing?"▶ Abspielen":previewPaused?"▶ Fortsetzen":"❚❚ Pause";
+        String state=effectPreviewActive
+            ?(effectPreviewPaused?"▶ Fortsetzen":"❚❚ Pause")
+            :!playing?"▶ Abspielen":previewPaused?"▶ Fortsetzen":"❚❚ Pause";
         if(playButton!=null)playButton.setText(state);
         if(fullscreenPauseButton!=null)fullscreenPauseButton.setText(state);
     }
     private void keepScreenAwake(){
-        if(playing || fullscreenDialog!=null){
+        if(playing || effectPreviewActive || fullscreenDialog!=null){
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
     private void togglePreview(){
+        if(effectPreviewActive){
+            effectPreviewPaused=!effectPreviewPaused;
+            if(effectPreviewPaused)previewVideo.pause();else previewVideo.start();
+            refreshPreviewButtons();keepScreenAwake();return;
+        }
         if(project.clips.isEmpty()){toast("Bitte erst Fotos oder Videos hinzufügen.");return;}
         if(playing){
             if(previewPaused)resumePreview();
@@ -1272,6 +1292,7 @@ public final class MainActivity extends Activity {
         if(slot<0)return;
         final ViewGroup.LayoutParams original=previewContainer.getLayoutParams();
         final int originalHeight=original.height;
+        final int[] effectPos={effectPreviewActive?previewVideo.getCurrentPosition():0};
         screen.removeView(previewContainer);
         Dialog dialog=new Dialog(this);
         fullscreenDialog=dialog;
@@ -1301,19 +1322,22 @@ public final class MainActivity extends Activity {
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         }
         dialog.setOnDismissListener(d->{
+            if(effectPreviewActive)effectPos[0]=previewVideo.getCurrentPosition();
             root.removeView(previewContainer);
             previewContainer.setLayoutParams(new LinearLayout.LayoutParams(-1,originalHeight));
             screen.addView(previewContainer,Math.min(slot,screen.getChildCount()));
             fullscreenPauseButton=null;
             fullscreenDialog=null;
-            if(playing)showClip(previewIndex,!previewPaused);
+            if(effectPreviewActive)showEffectPreviewAt(effectPos[0]);
+            else if(playing)showClip(previewIndex,!previewPaused);
             else showSelected();
             keepScreenAwake();
             refreshPreviewButtons();
         });
         dialog.show();
         if(window!=null)window.setLayout(-1,-1);
-        if(playing)showClip(previewIndex,!previewPaused);
+        if(effectPreviewActive)showEffectPreviewAt(effectPos[0]);
+        else if(playing)showClip(previewIndex,!previewPaused);
         else showSelected();
         refreshPreviewButtons();keepScreenAwake();
     }
@@ -1352,6 +1376,7 @@ public final class MainActivity extends Activity {
     private void releaseMusicPreview(){if(musicPreview!=null){try{musicPreview.release();}catch(Exception ignored){}musicPreview=null;}}
     private void stopPreview(){
         playing=false;previewPaused=false;pausedClipElapsedMs=0;
+        effectPreviewActive=false;effectPreviewPaused=false;effectPreviewFile=null;
         if(playbackTick!=null)main.removeCallbacks(playbackTick);
         if(previewVideo!=null){try{previewVideo.stopPlayback();}catch(Exception ignored){}}
         releaseMusicPreview();

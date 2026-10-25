@@ -1041,39 +1041,137 @@ public final class MainActivity extends Activity {
         Intent share=new Intent(Intent.ACTION_SEND);share.setType("video/mp4");share.putExtra(Intent.EXTRA_STREAM,uri);
         share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(share,"Video teilen"));
     }
-    private void togglePreview(){if(playing){stopPreview();showSelected();return;}
-        if(project.clips.isEmpty()){toast("Bitte erst Medien hinzufügen.");return;}
-        playing=true;previewIndex=0;previewElapsedOffsetMs=0;playButton.setText("■ Vorschau stoppen");
+    private void stopPreviewAndShowSelected(){
+        stopPreview();showSelected();
+    }
+    private void refreshPreviewButtons(){
+        String state=!playing?"▶ Abspielen":previewPaused?"▶ Fortsetzen":"❚❚ Pause";
+        if(playButton!=null)playButton.setText(state);
+        if(fullscreenPauseButton!=null)fullscreenPauseButton.setText(state);
+    }
+    private void keepScreenAwake(){
+        if(playing || fullscreenDialog!=null){
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+    private void togglePreview(){
+        if(project.clips.isEmpty()){toast("Bitte erst Fotos oder Videos hinzufügen.");return;}
+        if(playing){
+            if(previewPaused)resumePreview();
+            else pausePreview();
+            return;
+        }
+        playing=true;previewPaused=false;
+        previewIndex=0;previewElapsedOffsetMs=0;pausedClipElapsedMs=0;
+        keepScreenAwake();refreshPreviewButtons();
         beginClipPreview();
         if(!TextUtils.isEmpty(project.musicPath)){
-            try{musicPreview=new MediaPlayer();musicPreview.setDataSource(project.musicPath);
-                musicPreview.setLooping(true);musicPreview.setVolume((float)project.musicVolume,(float)project.musicVolume);
-                musicPreview.prepare();musicPreview.start();}catch(Exception ignored){releaseMusicPreview();}
+            try{
+                musicPreview=new MediaPlayer();musicPreview.setDataSource(project.musicPath);
+                musicPreview.setLooping(true);
+                musicPreview.setVolume((float)project.musicVolume,(float)project.musicVolume);
+                musicPreview.prepare();musicPreview.start();
+            }catch(Exception ignored){releaseMusicPreview();}
         }
         playbackTick=new Runnable(){public void run(){
-            if(!playing)return;
+            if(!playing||previewPaused)return;
+            if(previewIndex<0||previewIndex>=project.clips.size()){stopPreviewAndShowSelected();return;}
             Project.Clip c=project.clips.get(previewIndex);
             long elapsed=SystemClock.elapsedRealtime()-previewStartedAt;
             double global=previewElapsedOffsetMs/1000.0+elapsed/1000.0;
             String title="";
-            for(Project.Caption caption:project.captions)if(global>=caption.start&&global<=caption.end){title=caption.text;break;}
+            for(Project.Caption caption:project.captions)
+                if(global>=caption.start&&global<=caption.end){title=caption.text;break;}
             previewText.setText(title);
             totalLabel.setText(time(global)+" / "+time(project.duration()));
             syncPlaylistPreview(global);
             if(elapsed>=c.length()*1000){
                 previewElapsedOffsetMs+=(long)(c.length()*1000);
                 previewIndex++;
-                if(previewIndex>=project.clips.size()){stopPreview();showSelected();return;}
+                if(previewIndex>=project.clips.size()){stopPreviewAndShowSelected();return;}
                 beginClipPreview();
             }
             main.postDelayed(this,100);
         }};
         main.postDelayed(playbackTick,100);
     }
+    private void pausePreview(){
+        if(!playing||previewPaused)return;
+        pausedClipElapsedMs=Math.max(0,SystemClock.elapsedRealtime()-previewStartedAt);
+        previewPaused=true;
+        if(playbackTick!=null)main.removeCallbacks(playbackTick);
+        if(previewVideo!=null&&previewVideo.isPlaying())previewVideo.pause();
+        if(musicPreview!=null&&musicPreview.isPlaying())musicPreview.pause();
+        if(playlistPreview!=null&&playlistPreview.isPlaying())playlistPreview.pause();
+        refreshPreviewButtons();
+    }
+    private void resumePreview(){
+        if(!playing||!previewPaused)return;
+        previewPaused=false;
+        previewStartedAt=SystemClock.elapsedRealtime()-pausedClipElapsedMs;
+        try{if(previewVideo.getVisibility()==View.VISIBLE)previewVideo.start();}catch(Exception ignored){}
+        try{if(musicPreview!=null)musicPreview.start();}catch(Exception ignored){}
+        try{if(playlistPreview!=null)playlistPreview.start();}catch(Exception ignored){}
+        refreshPreviewButtons();keepScreenAwake();
+        if(playbackTick!=null)main.post(playbackTick);
+    }
     private void beginClipPreview(){
         if(previewIndex>=project.clips.size())return;
         previewStartedAt=SystemClock.elapsedRealtime();
+        pausedClipElapsedMs=0;
         showClip(previewIndex,true);
+    }
+    private void showFullscreen(){
+        if(fullscreenDialog!=null)return;
+        if(previewContainer==null)return;
+        final int slot=screen.indexOfChild(previewContainer);
+        if(slot<0)return;
+        final ViewGroup.LayoutParams original=previewContainer.getLayoutParams();
+        final int originalHeight=original.height;
+        screen.removeView(previewContainer);
+        Dialog dialog=new Dialog(this);
+        fullscreenDialog=dialog;
+        FrameLayout root=new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+        FrameLayout.LayoutParams full=new FrameLayout.LayoutParams(-1,-1);
+        root.addView(previewContainer,full);
+        LinearLayout controls=horizontal();
+        controls.setPadding(dp(12),dp(10),dp(12),dp(18));
+        controls.setBackgroundColor(0xB8000000);
+        fullscreenPauseButton=button(playing&&!previewPaused?"❚❚ Pause":playing?"▶ Fortsetzen":"▶ Abspielen",
+            0xFF3C325D,this::togglePreview);
+        controls.addView(fullscreenPauseButton,new LinearLayout.LayoutParams(0,dp(49),1));
+        TextView close=button("× Schließen",SURFACE_2,dialog::dismiss);
+        LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(0,dp(49),1);
+        cp.leftMargin=dp(9);controls.addView(close,cp);
+        FrameLayout.LayoutParams bottom=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);
+        root.addView(controls,bottom);
+        dialog.setContentView(root);
+        Window window=dialog.getWindow();
+        if(window!=null){
+            window.setBackgroundDrawableResource(android.R.color.black);
+            window.setLayout(-1,-1);
+            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        }
+        dialog.setOnDismissListener(d->{
+            root.removeView(previewContainer);
+            previewContainer.setLayoutParams(new LinearLayout.LayoutParams(-1,originalHeight));
+            screen.addView(previewContainer,Math.min(slot,screen.getChildCount()));
+            fullscreenPauseButton=null;
+            fullscreenDialog=null;
+            if(playing)showClip(previewIndex,!previewPaused);
+            else showSelected();
+            keepScreenAwake();
+            refreshPreviewButtons();
+        });
+        dialog.show();
+        if(window!=null)window.setLayout(-1,-1);
+        if(playing)showClip(previewIndex,!previewPaused);
+        else showSelected();
+        refreshPreviewButtons();keepScreenAwake();
     }
     private void syncPlaylistPreview(double position){
         int songIndex=-1;
@@ -1109,12 +1207,13 @@ public final class MainActivity extends Activity {
     }
     private void releaseMusicPreview(){if(musicPreview!=null){try{musicPreview.release();}catch(Exception ignored){}musicPreview=null;}}
     private void stopPreview(){
-        playing=false;
+        playing=false;previewPaused=false;pausedClipElapsedMs=0;
         if(playbackTick!=null)main.removeCallbacks(playbackTick);
         if(previewVideo!=null){try{previewVideo.stopPlayback();}catch(Exception ignored){}}
         releaseMusicPreview();
         releasePlaylistPreview();
-        if(playButton!=null)playButton.setText("▶ Film abspielen");
+        refreshPreviewButtons();
+        keepScreenAwake();
         if(totalLabel!=null)totalLabel.setText(project.clips.size()+" Clips   ·   "+time(project.duration()));
     }
     private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_SHORT).show();}

@@ -34,6 +34,51 @@ final class Project {
         }
         return Math.max(0,d);
     }
+    /**
+     * Reverses the order in which photos appear, leaving video positions unchanged.
+     * Transition effects belong to boundaries in the timeline, not to file names.
+     * Hence transition style and duration remain attached to their original slot.
+     * Returns the number of affected clips; 0 means no change.
+     */
+    int reversePhotoOrder() {
+        java.util.List<Integer> positions=new java.util.ArrayList<>();
+        java.util.List<Clip> images=new java.util.ArrayList<>();
+        for(int i=0;i<clips.size();i++){
+            if(clips.get(i).image){positions.add(i);images.add(clips.get(i));}
+        }
+        if(images.size()<2)return 0;
+        String[] styles=new String[positions.size()];
+        double[] transitions=new double[positions.size()];
+        for(int i=0;i<positions.size();i++){
+            Clip old=clips.get(positions.get(i));
+            styles[i]=old.transition;
+            transitions[i]=old.transitionSeconds;
+        }
+        for(int i=0;i<positions.size();i++){
+            Clip reversed=images.get(images.size()-i-1);
+            reversed.transition=styles[i];
+            reversed.transitionSeconds=transitions[i];
+            clips.set(positions.get(i),reversed);
+        }
+        return images.size();
+    }
+
+    /** Reverses clip order, not the frames inside a video. */
+    int reverseClipOrder() {
+        if(clips.size()<2)return 0;
+        String[] styles=new String[clips.size()];
+        double[] transitions=new double[clips.size()];
+        for(int i=0;i<clips.size();i++){
+            styles[i]=clips.get(i).transition;
+            transitions[i]=clips.get(i).transitionSeconds;
+        }
+        java.util.Collections.reverse(clips);
+        for(int i=0;i<clips.size();i++){
+            clips.get(i).transition=styles[i];
+            clips.get(i).transitionSeconds=transitions[i];
+        }
+        return clips.size();
+    }
     JSONObject toJson() throws Exception {
         JSONObject j = new JSONObject();
         JSONArray cs=new JSONArray(),ts=new JSONArray(),aus=new JSONArray(),sts=new JSONArray();

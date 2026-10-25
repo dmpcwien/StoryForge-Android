@@ -186,7 +186,9 @@ public final class MainActivity extends Activity {
         row1.addView(media,new LinearLayout.LayoutParams(0,dp(46),1));
         TextView edit=button("✂ Clip ändern",SURFACE_2,this::editSelected);
         LinearLayout.LayoutParams e=new LinearLayout.LayoutParams(0,dp(46),1);e.leftMargin=dp(8);row1.addView(edit,e);
-        screen.addView(row1,margin(-1,-2,9));
+        screen.addView(row1,margin(-1,-2,8));
+        TextView reversePhotos=pill("↩  Bilder rückwärts abspielen",SURFACE_2,this::reverseMediaDialog);
+        screen.addView(reversePhotos,margin(-1,-2,8));
         TextView auto=button("✦  AUTOMATISCHEN FILM ERSTELLEN",0xFF393052,this::startAutoWizard);
         screen.addView(auto,margin(-1,47,7));
         TextView undoAuto=pill("↶ Letzten automatischen Schnitt rückgängig",SURFACE,this::undoAutoFilm);
@@ -750,6 +752,32 @@ public final class MainActivity extends Activity {
                 }catch(Exception ex){toast("Ungültige Werte.");}
             }).setNeutralButton("Löschen",(d,w)->{project.stickers.remove(index);saveProject();refresh();})
             .setNegativeButton("Abbrechen",null).show();
+    }
+    private void reverseMediaDialog(){
+        if(project.clips.isEmpty()){toast("Bitte zuerst Fotos oder Videos hinzufügen.");return;}
+        long count=0;
+        for(Project.Clip c:project.clips)if(c.image)count++;
+        if(count<2){
+            toast("Für rückwärtige Bildfolge brauchst du mindestens zwei Fotos.");
+            return;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Reihenfolge rückwärts abspielen")
+            .setMessage("Die letzten Fotos zuerst anzeigen. Die Originaldateien bleiben unverändert. Die Wiedergabe und der MP4-Export übernehmen dieselbe Reihenfolge.")
+            .setItems(new String[]{
+                "Nur Fotos umkehren (Videos behalten ihren Platz)",
+                "Alle Clips umkehren (Fotos und Videos)"
+            },(dialog,which)->{
+                stopPreview();
+                int changed=which==0?project.reversePhotoOrder():project.reverseClipOrder();
+                if(changed<2){toast("Keine Änderung notwendig.");return;}
+                selected=0;
+                saveProject();
+                refresh();
+                toast((which==0?"Fotos":"Clips")+" rückwärts sortiert · Rückgängig möglich.");
+            })
+            .setNegativeButton("Abbrechen",null)
+            .show();
     }
     private void editSelected(){
         if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}

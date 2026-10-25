@@ -187,7 +187,7 @@ public final class MainActivity extends Activity {
         TextView edit=button("✂ Clip ändern",SURFACE_2,this::editSelected);
         LinearLayout.LayoutParams e=new LinearLayout.LayoutParams(0,dp(46),1);e.leftMargin=dp(8);row1.addView(edit,e);
         screen.addView(row1,margin(-1,-2,8));
-        TextView reversePhotos=pill("↩  Bilder rückwärts abspielen",SURFACE_2,this::reverseMediaDialog);
+        TextView reversePhotos=pill("↩  Reihenfolge umkehren",SURFACE_2,this::reverseMediaDialog);
         screen.addView(reversePhotos,margin(-1,-2,8));
         TextView auto=button("✦  AUTOMATISCHEN FILM ERSTELLEN",0xFF393052,this::startAutoWizard);
         screen.addView(auto,margin(-1,47,7));
@@ -754,27 +754,36 @@ public final class MainActivity extends Activity {
             .setNegativeButton("Abbrechen",null).show();
     }
     private void reverseMediaDialog(){
-        if(project.clips.isEmpty()){toast("Bitte zuerst Fotos oder Videos hinzufügen.");return;}
-        long count=0;
-        for(Project.Clip c:project.clips)if(c.image)count++;
-        if(count<2){
-            toast("Für rückwärtige Bildfolge brauchst du mindestens zwei Fotos.");
+        if(project.clips.size()<2){
+            toast("Für eine umgekehrte Reihenfolge brauchst du mindestens zwei Clips.");
             return;
         }
+        // AlertDialog cannot display both setMessage() and setItems() simultaneously
+        // on common Android themes: the text replaces the choice list.
         new AlertDialog.Builder(this)
-            .setTitle("Reihenfolge rückwärts abspielen")
-            .setMessage("Die letzten Fotos zuerst anzeigen. Die Originaldateien bleiben unverändert. Die Wiedergabe und der MP4-Export übernehmen dieselbe Reihenfolge.")
+            .setTitle("Was soll rückwärts laufen?")
             .setItems(new String[]{
-                "Nur Fotos umkehren (Videos behalten ihren Platz)",
-                "Alle Clips umkehren (Fotos und Videos)"
+                "Letzten Clip zuerst – ganzen Film umkehren",
+                "Nur Fotos umkehren – Videos am selben Platz"
             },(dialog,which)->{
+                if(which==1){
+                    int photos=0;
+                    for(Project.Clip clip:project.clips)if(clip.image)photos++;
+                    if(photos<2){
+                        toast("Mindestens zwei Fotos erforderlich.");
+                        return;
+                    }
+                }
                 stopPreview();
-                int changed=which==0?project.reversePhotoOrder():project.reverseClipOrder();
-                if(changed<2){toast("Keine Änderung notwendig.");return;}
+                int changed=which==0?project.reverseClipOrder():project.reversePhotoOrder();
+                if(changed<2){
+                    toast("Keine Änderung notwendig.");
+                    return;
+                }
                 selected=0;
                 saveProject();
                 refresh();
-                toast((which==0?"Fotos":"Clips")+" rückwärts sortiert · Rückgängig möglich.");
+                toast("Reihenfolge umgekehrt. Mit Rückgängig wiederherstellen.");
             })
             .setNegativeButton("Abbrechen",null)
             .show();

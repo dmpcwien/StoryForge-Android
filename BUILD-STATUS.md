@@ -1,2 +1,2 @@
 StoryForge APK Build: success
-Run: https://github.com/dmpcwien/StoryForge-Android/actions/runs/40201905004
+Run: https://github.com/dmpcwien/StoryForge-Android/actions/runs/40201917859

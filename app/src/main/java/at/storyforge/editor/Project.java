@@ -117,16 +117,27 @@ final class Project {
         double sourceDuration, start=0, end=0;
         double speed=1,brightness=0,contrast=1,saturation=1;
         boolean kenBurns=false;
+        double cropX=0,cropY=0,cropW=1,cropH=1;
         int rotationDegrees=0;
         String rotationSource="";
         String transition="fade";double transitionSeconds=.65;
         double length(){return Math.max(.1,(end-start)/Math.max(.25,speed));}
+        void setCrop(double x,double y,double w,double h){
+            if(!Double.isFinite(x)||!Double.isFinite(y)||!Double.isFinite(w)||!Double.isFinite(h)){
+                cropX=0;cropY=0;cropW=1;cropH=1;return;
+            }
+            cropW=Math.max(.1,Math.min(1,w));
+            cropH=Math.max(.1,Math.min(1,h));
+            cropX=Math.max(0,Math.min(1-cropW,x));
+            cropY=Math.max(0,Math.min(1-cropH,y));
+        }
         JSONObject toJson()throws Exception{return new JSONObject().put("path",path).put("name",name)
             .put("image",image).put("audio",audio).put("sourceDuration",sourceDuration)
             .put("start",start).put("end",end).put("transition",transition)
             .put("transitionSeconds",transitionSeconds).put("speed",speed)
             .put("brightness",brightness).put("contrast",contrast).put("saturation",saturation)
-            .put("kenBurns",kenBurns).put("rotationDegrees",rotationDegrees)
+            .put("kenBurns",kenBurns).put("cropX",cropX).put("cropY",cropY)
+            .put("cropW",cropW).put("cropH",cropH).put("rotationDegrees",rotationDegrees)
             .put("rotationSource",rotationSource);}
         static Clip fromJson(JSONObject j){Clip c=new Clip();c.path=j.optString("path");c.name=j.optString("name");
             c.image=j.optBoolean("image");c.audio=j.optBoolean("audio");c.sourceDuration=j.optDouble("sourceDuration",4);
@@ -135,6 +146,7 @@ final class Project {
             c.speed=Math.max(.25,Math.min(4,j.optDouble("speed",1)));c.brightness=j.optDouble("brightness",0);
             c.contrast=j.optDouble("contrast",1);c.saturation=j.optDouble("saturation",1);
             c.kenBurns=j.optBoolean("kenBurns",false);
+            c.setCrop(j.optDouble("cropX",0),j.optDouble("cropY",0),j.optDouble("cropW",1),j.optDouble("cropH",1));
             c.rotationDegrees=((j.optInt("rotationDegrees",0)%360)+360)%360;
             c.rotationSource=j.optString("rotationSource","");return c;}
     }

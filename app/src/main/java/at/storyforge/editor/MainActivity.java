@@ -366,9 +366,22 @@ public final class MainActivity extends Activity {
             if(oriented!=raw)raw.recycle();
             raw=oriented;
         }
+        Bitmap clipped=cropBitmap(raw,c.cropX,c.cropY,c.cropW,c.cropH);
+        if(clipped!=raw)raw.recycle();
+        raw=clipped;
         Bitmap scaled=Bitmap.createScaledBitmap(raw,200,130,true);
         if(raw!=scaled)raw.recycle();
         thumbCache.put(key,scaled);return scaled;
+    }
+    private Bitmap cropBitmap(Bitmap input,double x,double y,double w,double h){
+        if(input==null)return null;
+        if(w>=.9999&&h>=.9999&&x<.0001&&y<.0001)return input;
+        int iw=input.getWidth(),ih=input.getHeight();
+        int left=Math.max(0,Math.min(iw-1,(int)Math.floor(iw*x)));
+        int top=Math.max(0,Math.min(ih-1,(int)Math.floor(ih*y)));
+        int width=Math.max(1,Math.min(iw-left,(int)Math.round(iw*w)));
+        int height=Math.max(1,Math.min(ih-top,(int)Math.round(ih*h)));
+        return Bitmap.createBitmap(input,left,top,width,height);
     }
     private void showSelected(){
         previewText.setText("");
@@ -395,6 +408,11 @@ public final class MainActivity extends Activity {
                 if(corrected!=image)image.recycle();
                 image=corrected;
             }
+            if(image!=null) {
+                Bitmap clipped=cropBitmap(image,c.cropX,c.cropY,c.cropW,c.cropH);
+                if(clipped!=image)image.recycle();
+                image=clipped;
+            }
             previewImage.setImageBitmap(image);
         }else{
             previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
@@ -402,8 +420,11 @@ public final class MainActivity extends Activity {
             previewVideo.setVideoPath(c.path);
             previewVideo.setOnPreparedListener(mp->{
                 try{mp.setVolume((float)project.originalVolume,(float)project.originalVolume);
-                    previewVideo.seekTo((int)(c.start*1000));
-                    if(autoPlay&&playing)previewVideo.start();}catch(Exception ignored){}
+                    long offset=playing?(previewPaused?pausedClipElapsedMs:
+                        Math.max(0,SystemClock.elapsedRealtime()-previewStartedAt)):0;
+                    long seek=(long)((c.start+Math.min(c.length(),offset/1000.0)*c.speed)*1000);
+                    previewVideo.seekTo((int)Math.min(Integer.MAX_VALUE,seek));
+                    if(autoPlay&&playing&&!previewPaused)previewVideo.start();}catch(Exception ignored){}
             });
         }
     }

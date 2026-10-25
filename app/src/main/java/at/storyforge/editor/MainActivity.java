@@ -137,7 +137,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout brand=horizontal();
         LinearLayout brandLeft=vertical();
-        TextView eyebrow=text("STORYFORGE   /   PREMIUM STUDIO 1.1",10,CYAN,true);eyebrow.setLetterSpacing(.14f);
+        TextView eyebrow=text("STORYFORGE   /   PREMIUM STUDIO   ·   v1.3.3",10,CYAN,true);eyebrow.setLetterSpacing(.14f);
         brandLeft.addView(eyebrow);
         TextView title=text("Dein Film. Dein Stil.",25,WHITE,true);brandLeft.addView(title,margin(-1,-2,4));
         brand.addView(brandLeft,new LinearLayout.LayoutParams(0,-2,1));

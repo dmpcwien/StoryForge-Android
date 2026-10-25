@@ -960,16 +960,50 @@ public final class MainActivity extends Activity {
             }).show();
     }
     private void clipTimingDialog(Project.Clip c){
-        LinearLayout wrap=vertical();wrap.setPadding(dp(20),dp(8),dp(20),0);
+        LinearLayout wrap=vertical();wrap.setPadding(dp(20),dp(8),dp(20),dp(5));
         EditText start=number(c.start),end=number(c.end);
-        if(!c.image)wrap.addView(field("Beginn in Sekunden",start));
-        wrap.addView(field(c.image?"Anzeigedauer in Sekunden":"Ende in Sekunden (Original: "+time(c.sourceDuration)+")",end));
-        new AlertDialog.Builder(this).setTitle(c.image?"Bilddauer":"Video schneiden").setView(wrap)
+        ImageView frame=new ImageView(this);frame.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        Bitmap thumb=thumbnail(c);
+        if(thumb!=null)frame.setImageBitmap(thumb);
+        wrap.addView(frame,lp(-1,128));
+        if(!c.image)wrap.addView(field("Startpunkt (Sekunden)",start));
+        wrap.addView(field(c.image?"Anzeigedauer (Sekunden)":"Endpunkt (Sekunden)",end));
+        final double maximum=c.image?60:Math.max(.2,c.sourceDuration);
+        final int maxTick=1000;
+        SeekBar from=new SeekBar(this),to=new SeekBar(this);
+        from.setMax(maxTick);to.setMax(maxTick);
+        from.setProgress((int)Math.round(Math.min(1,c.start/maximum)*maxTick));
+        to.setProgress((int)Math.round(Math.min(1,c.end/maximum)*maxTick));
+        if(!c.image){
+            wrap.addView(text("Beginn mit dem Finger einstellen",12,CYAN,false),margin(-1,-2,4));
+            wrap.addView(from,margin(-1,-2,8));
+        }
+        wrap.addView(text(c.image?"Bilddauer mit dem Finger einstellen":"Ende mit dem Finger einstellen",
+            12,CYAN,false),margin(-1,-2,4));
+        wrap.addView(to,margin(-1,-2,8));
+        from.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onProgressChanged(SeekBar seek,int progress,boolean user){
+                if(user)start.setText(String.format(Locale.US,"%.2f",maximum*progress/maxTick));
+            }
+            @Override public void onStartTrackingTouch(SeekBar seek){}
+            @Override public void onStopTrackingTouch(SeekBar seek){}
+        });
+        to.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onProgressChanged(SeekBar seek,int progress,boolean user){
+                if(user)end.setText(String.format(Locale.US,"%.2f",maximum*progress/maxTick));
+            }
+            @Override public void onStartTrackingTouch(SeekBar seek){}
+            @Override public void onStopTrackingTouch(SeekBar seek){}
+        });
+        new AlertDialog.Builder(this).setTitle(c.image?"Bilddauer zuschneiden":"Video Anfang / Ende schneiden")
+            .setView(wrap)
             .setPositiveButton("Speichern",(d,w)->{
                 try{
                     double a=c.image?0:parse(start),b=parse(end);
-                    if(a<0||b<=a+.1||(!c.image&&b>c.sourceDuration+.05))throw new Exception("Ungültiger Zeitbereich.");
-                    c.start=a;c.end=b;stopPreview();saveProject();refresh();
+                    if(!Double.isFinite(a)||!Double.isFinite(b)||a<0||b<=a+.1||
+                        (!c.image&&b>c.sourceDuration+.05)||c.image&&b>60)throw new Exception("Ungültiger Zeitbereich.");
+                    c.start=a;c.end=b;
+                    stopPreview();thumbCache.evictAll();saveProject();refresh();
                 }catch(Exception ex){toast("Bitte gültige Zeiten angeben.");}
             }).setNegativeButton("Abbrechen",null).show();
     }

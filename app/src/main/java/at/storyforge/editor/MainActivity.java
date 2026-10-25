@@ -230,6 +230,12 @@ public final class MainActivity extends Activity {
         TextView ov=pill("▧ Overlay",SURFACE,this::pickSticker);
         LinearLayout.LayoutParams op=new LinearLayout.LayoutParams(0,-2,1);op.leftMargin=dp(7);row3.addView(ov,op);
         screen.addView(row3,margin(-1,-2,8));
+        LinearLayout trimRow=horizontal();
+        trimRow.addView(pill("✂ Zeit zuschneiden",SURFACE,this::trimSelected),new LinearLayout.LayoutParams(0,-2,1));
+        TextView crop=pill("▣ Bildausschnitt",SURFACE,this::editCrop);
+        LinearLayout.LayoutParams cropParams=new LinearLayout.LayoutParams(0,-2,1);
+        cropParams.leftMargin=dp(7);trimRow.addView(crop,cropParams);
+        screen.addView(trimRow,margin(-1,-2,8));
 
         LinearLayout musicBar=horizontal();musicBar.setPadding(dp(14),dp(10),dp(10),dp(10));musicBar.setBackground(stroke(SURFACE,0xFF353957,14));
         LinearLayout musicTitle=vertical();musicTitle.addView(text("♪  SOUNDTRACK",11,CYAN,true));
@@ -870,6 +876,89 @@ public final class MainActivity extends Activity {
     }
     private LinearLayout field(String title,EditText edit){LinearLayout l=vertical();l.addView(text(title,13,0xFFAEB3C8,false));l.addView(edit);return l;}
     private double parse(EditText e){return Double.parseDouble(e.getText().toString().trim().replace(',','.'));}
+    private void trimSelected(){
+        if(project.clips.isEmpty()){toast("Bitte zuerst Bilder oder Videos hinzufügen.");return;}
+        clipTimingDialog(project.clips.get(selected));
+    }
+    private Bitmap sourcePreviewBitmap(Project.Clip c){
+        Bitmap image=null;
+        if(c.image){
+            BitmapFactory.Options opts=new BitmapFactory.Options();
+            opts.inJustDecodeBounds=true;BitmapFactory.decodeFile(c.path,opts);
+            opts.inSampleSize=Math.max(1,Math.max(opts.outWidth/660,opts.outHeight/660));
+            opts.inJustDecodeBounds=false;
+            image=BitmapFactory.decodeFile(c.path,opts);
+        }else{
+            MediaMetadataRetriever meta=new MediaMetadataRetriever();
+            try{
+                meta.setDataSource(c.path);
+                image=meta.getFrameAtTime((long)(c.start*1000000),
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+            }catch(Exception ignored){}finally{try{meta.release();}catch(Exception ignored){}}
+        }
+        if(image!=null&&c.rotationDegrees!=0){
+            Bitmap rotated=PhotoOrientation.rotate(image,c.rotationDegrees);
+            if(rotated!=image)image.recycle();
+            image=rotated;
+        }
+        return image;
+    }
+    private void editCrop(){
+        if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}
+        final Project.Clip clip=project.clips.get(selected);
+        final Bitmap original=sourcePreviewBitmap(clip);
+        if(original==null){toast("Kein Vorschaubild für den Ausschnitt verfügbar.");return;}
+        LinearLayout layout=vertical();
+        layout.setPadding(dp(20),dp(6),dp(20),dp(5));
+        ImageView sample=new ImageView(this);
+        sample.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        layout.addView(sample,lp(-1,180));
+        layout.addView(text("Bild oder Video: Bereich einstellen; Vorschau aktualisiert sich beim Verschieben.",
+            12,MUTED,false),margin(-1,-2,8));
+        final SeekBar[] controls=new SeekBar[4];
+        final TextView[] captions=new TextView[4];
+        final String[] labels={"Links","Oben","Breite","Höhe"};
+        final int[] values={(int)Math.round(clip.cropX*100),(int)Math.round(clip.cropY*100),
+            (int)Math.round(clip.cropW*100),(int)Math.round(clip.cropH*100)};
+        final Runnable update=()->{
+            int width=Math.max(10,values[2]),height=Math.max(10,values[3]);
+            int x=Math.min(values[0],100-width),y=Math.min(values[1],100-height);
+            for(int i=0;i<4;i++)captions[i].setText(labels[i]+": "+new int[]{x,y,width,height}[i]+" %");
+            Bitmap region=cropBitmap(original,x/100.,y/100.,width/100.,height/100.);
+            sample.setImageBitmap(region);
+        };
+        for(int i=0;i<4;i++){
+            final int index=i;
+            captions[i]=text("",12,WHITE,false);
+            layout.addView(captions[i],margin(-1,-2,3));
+            SeekBar bar=new SeekBar(this);
+            bar.setMax(100);bar.setProgress(values[i]);
+            bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+                @Override public void onProgressChanged(SeekBar sb,int p,boolean user){
+                    values[index]=p;
+                    if(index>=2 && p<10){values[index]=10;sb.setProgress(10);}
+                    if(user)update.run();
+                }
+                @Override public void onStartTrackingTouch(SeekBar sb){}
+                @Override public void onStopTrackingTouch(SeekBar sb){}
+            });
+            layout.addView(bar,margin(-1,-2,7));controls[i]=bar;
+        }
+        update.run();
+        new AlertDialog.Builder(this).setTitle("Bildausschnitt – "+clip.name).setView(layout)
+            .setPositiveButton("Übernehmen",(d,w)->{
+                clip.setCrop(values[0]/100.,values[1]/100.,values[2]/100.,values[3]/100.);
+                stopPreview();thumbCache.evictAll();saveProject();refresh();
+                if(!clip.image)toast("Video-Zuschnitt im MP4-Export und in der Effektvorschau sichtbar.");
+            })
+            .setNeutralButton("Zurücksetzen",(d,w)->{
+                clip.setCrop(0,0,1,1);
+                stopPreview();thumbCache.evictAll();saveProject();refresh();
+            })
+            .setNegativeButton("Abbrechen",null).setOnDismissListener(d->{
+                if(!original.isRecycled())original.recycle();
+            }).show();
+    }
     private void clipTimingDialog(Project.Clip c){
         LinearLayout wrap=vertical();wrap.setPadding(dp(20),dp(8),dp(20),0);
         EditText start=number(c.start),end=number(c.end);

@@ -197,6 +197,7 @@ final class ExportEngine {
             String audio="["+audioInputs.get(i)+":a]";
             filter.append(video)
                 .append(orientationFilter(c.rotationDegrees))
+                .append(cropFilter(c))
                 .append("scale=").append(w).append(":").append(h)
                 .append(":force_original_aspect_ratio=decrease:flags=lanczos")
                 .append(",pad=").append(w).append(":").append(h)
@@ -322,6 +323,16 @@ final class ExportEngine {
             "-pix_fmt","yuv420p","-c:a","aac","-b:a","320k","-ar","48000",
             "-movflags","+faststart","-shortest",out.getAbsolutePath());
         return args;
+    }
+    private String cropFilter(Project.Clip clip){
+        if(clip.cropW>=.9999 && clip.cropH>=.9999 && clip.cropX<.0001 && clip.cropY<.0001)
+            return "";
+        // FFmpeg computes normalized crop coordinates against the oriented source.
+        double width=Math.max(.1,Math.min(1,clip.cropW));
+        double height=Math.max(.1,Math.min(1,clip.cropH));
+        double x=Math.max(0,Math.min(1-width,clip.cropX));
+        double y=Math.max(0,Math.min(1-height,clip.cropY));
+        return "crop=iw*"+n(width)+":ih*"+n(height)+":iw*"+n(x)+":ih*"+n(y)+",";
     }
     private String orientationFilter(int degrees){
         switch(((degrees%360)+360)%360){

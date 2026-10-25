@@ -40,6 +40,7 @@ android {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
     // LGPL-3.0 default libraries plus GPL-3.0 codec additions (libx264).
     // Distribution of the complete app must comply with GPL-3.0 obligations.
     implementation 'androidx.core:core:1.15.0'

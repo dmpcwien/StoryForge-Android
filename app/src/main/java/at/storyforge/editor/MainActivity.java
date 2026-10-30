@@ -76,6 +76,8 @@ public final class MainActivity extends Activity {
     private int selected=0;
     private LinearLayout screen,timeline,captionList,audioList,stickerList;
     private HorizontalScrollView timelineScroller;
+    private final List<View> timelineGaps=new ArrayList<>();
+    private int activeInsertionGap=-1;
     private int autoStyle=0,autoStartClipCount=0,autoMusicStartIndex=0;
     private boolean autoRequested=false;
     private FrameLayout previewContainer;
@@ -295,6 +297,62 @@ public final class MainActivity extends Activity {
         previewNote.setGravity(Gravity.CENTER);screen.addView(previewNote,margin(-1,-2,7));
     }
     private String time(double seconds){int s=(int)Math.max(0,seconds);return String.format(Locale.GERMANY,"%02d:%02d",s/60,s%60);}
+    private boolean isStoryForgeDrag(DragEvent event){
+        return event.getClipDescription()!=null &&
+            "storyforge-clip".contentEquals(event.getClipDescription().getLabel());
+    }
+    private View makeTimelineGap(final int gap){
+        View target=new View(this);
+        target.setBackground(panel(Color.TRANSPARENT,5));
+        timelineGaps.add(target);
+        target.setOnDragListener((v,event)->{
+            if(event.getAction()==DragEvent.ACTION_DRAG_STARTED)return isStoryForgeDrag(event);
+            switch(event.getAction()){
+                case DragEvent.ACTION_DRAG_ENTERED:
+                case DragEvent.ACTION_DRAG_LOCATION:
+                    markTimelineGap(gap);
+                    autoScrollTimeline(v,event.getX());
+                    return true;
+                case DragEvent.ACTION_DROP:
+                    dropTimelineClip(event,gap);return true;
+                case DragEvent.ACTION_DRAG_ENDED:
+                    markTimelineGap(-1);return true;
+                default:return true;
+            }
+        });
+        return target;
+    }
+    private void markTimelineGap(int gap){
+        if(activeInsertionGap==gap)return;
+        activeInsertionGap=gap;
+        for(int i=0;i<timelineGaps.size();i++){
+            View marker=timelineGaps.get(i);
+            marker.setBackground(panel(i==gap?PURPLE:Color.TRANSPARENT,5));
+        }
+    }
+    private void autoScrollTimeline(View target,float offset){
+        if(timelineScroller==null)return;
+        float x=target.getLeft()+offset-timelineScroller.getScrollX();
+        if(x<dp(55))timelineScroller.smoothScrollBy(-dp(22),0);
+        else if(x>timelineScroller.getWidth()-dp(55))
+            timelineScroller.smoothScrollBy(dp(22),0);
+    }
+    private void dropTimelineClip(DragEvent event,int gap){
+        if(!isStoryForgeDrag(event)||event.getClipData()==null||
+            event.getClipData().getItemCount()==0)return;
+        try{
+            int from=Integer.parseInt(event.getClipData().getItemAt(0).getText().toString());
+            if(from<0||from>=project.clips.size()||gap<0||gap>project.clips.size())return;
+            // Postpone rebuilding the timeline until Android finishes drag dispatch.
+            main.post(()->{
+                stopPreview();
+                int inserted=TimelineMove.moveToGap(project.clips,from,gap);
+                if(inserted>=0){
+                    selected=inserted;saveProject();refresh();
+                }else markTimelineGap(-1);
+            });
+        }catch(Exception ex){markTimelineGap(-1);toast("Clip konnte nicht verschoben werden.");}
+    }
     private void refresh(){
         if(projectNameLabel!=null)
             projectNameLabel.setText(activeProjectId.isEmpty()?
@@ -302,6 +360,8 @@ public final class MainActivity extends Activity {
                 "PROJEKT  ·  "+activeProjectName+"  ·  Automatisch gesichert");
         if(timeline==null)return;
         timeline.removeAllViews();
+        timelineGaps.clear();
+        activeInsertionGap=-1;
         if(project.clips.isEmpty()){
             TextView hint=text("  +  Fotos und Videos hinzufügen, um deinen Film zu starten",13,MUTED,false);
             hint.setBackground(panel(SURFACE,12));timeline.addView(hint,lp(295,88));
@@ -319,69 +379,66 @@ public final class MainActivity extends Activity {
             TextView name=text((c.image?"▣ ":"▶ ")+nm,10.5f,WHITE,true);name.setSingleLine(true);
             card.addView(name,margin((int)(110*project.timelineZoom),20,3));
             card.addView(text(time(c.length())+"   "+(i==0?"START":transitionLabel(c.transition)),10,MUTED,false));
-            LinearLayout.LayoutParams p=lp((int)(124*project.timelineZoom),112);p.rightMargin=dp(7);timeline.addView(card,p);
+            // The drop gap is a real target between adjacent clips, not a swap.
+            timeline.addView(makeTimelineGap(index),lp(16,112));
+            LinearLayout.LayoutParams p=lp((int)(124*project.timelineZoom),112);
+            timeline.addView(card,p);
             card.setOnClickListener(v->{stopPreview();selected=index;showSelected();refresh();});
             final float[] touchStart=new float[2];
             final boolean[] dragging={false};
+            final Runnable[] pendingDrag={null};
+            final int slop=android.view.ViewConfiguration.get(this).getScaledTouchSlop();
             card.setOnTouchListener((v,event)->{
-                int action=event.getActionMasked();
-                if(action==MotionEvent.ACTION_DOWN){
-                    touchStart[0]=event.getX();touchStart[1]=event.getY();dragging[0]=false;
-                    v.getParent().requestDisallowInterceptTouchEvent(true);
-                    return false; // Still allow a tap to select the clip.
+                switch(event.getActionMasked()){
+                    case MotionEvent.ACTION_DOWN:
+                        touchStart[0]=event.getX();touchStart[1]=event.getY();
+                        dragging[0]=false;
+                        // Do NOT intercept horizontal scrolling while waiting.
+                        pendingDrag[0]=()->{
+                            ClipData data=ClipData.newPlainText("storyforge-clip",
+                                Integer.toString(index));
+                            boolean started=v.startDragAndDrop(data,new View.DragShadowBuilder(v),null,0);
+                            if(started){
+                                dragging[0]=true;
+                                v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                            }
+                        };
+                        v.postDelayed(pendingDrag[0],1500L);
+                        return false; // Android still handles single taps/click accessibility.
+                    case MotionEvent.ACTION_MOVE:
+                        if(!dragging[0]&&Math.hypot(event.getX()-touchStart[0],
+                            event.getY()-touchStart[1])>slop){
+                            v.removeCallbacks(pendingDrag[0]); // finger swipe scrolls the timeline
+                        }
+                        return dragging[0];
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if(pendingDrag[0]!=null)v.removeCallbacks(pendingDrag[0]);
+                        return dragging[0];
+                    default:return dragging[0];
                 }
-                if(action==MotionEvent.ACTION_MOVE && !dragging[0]){
-                    if(Math.hypot(event.getX()-touchStart[0],event.getY()-touchStart[1])>dp(10)){
-                        dragging[0]=true;
-                        v.cancelLongPress();
-                        ClipData data=ClipData.newPlainText("storyforge-clip",Integer.toString(index));
-                        v.startDragAndDrop(data,new View.DragShadowBuilder(v),null,0);
-                        v.getParent().requestDisallowInterceptTouchEvent(false);
-                        return true;
-                    }
-                }
-                if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)
-                    v.getParent().requestDisallowInterceptTouchEvent(false);
-                return dragging[0];
             });
             card.setOnDragListener((v,event)->{
+                if(event.getAction()==DragEvent.ACTION_DRAG_STARTED)
+                    return isStoryForgeDrag(event);
                 switch(event.getAction()){
-                    case DragEvent.ACTION_DRAG_STARTED:
-                        return event.getClipDescription()!=null &&
-                            event.getClipDescription().hasMimeType("text/plain");
                     case DragEvent.ACTION_DRAG_ENTERED:
-                        v.setAlpha(.6f);return true;
-                    case DragEvent.ACTION_DRAG_EXITED:
-                    case DragEvent.ACTION_DRAG_ENDED:
-                        v.setAlpha(1f);return true;
                     case DragEvent.ACTION_DRAG_LOCATION:
-                        if(timelineScroller!=null){
-                            float visibleX=v.getX()+event.getX()-timelineScroller.getScrollX();
-                            if(visibleX<dp(44))timelineScroller.smoothScrollBy(-dp(25),0);
-                            if(visibleX>timelineScroller.getWidth()-dp(44))
-                                timelineScroller.smoothScrollBy(dp(25),0);
-                        }
+                        int gap=event.getX()<v.getWidth()/2f?index:index+1;
+                        markTimelineGap(gap);
+                        autoScrollTimeline(v,event.getX());
                         return true;
                     case DragEvent.ACTION_DROP:
-                        v.setAlpha(1f);
-                        try{
-                            int from=Integer.parseInt(event.getClipData().getItemAt(0).getText().toString());
-                            if(from<0||from>=project.clips.size())return true;
-                            final int target=index;
-                            final boolean after=event.getX()>v.getWidth()/2f;
-                            main.post(()->{
-                                stopPreview();
-                                int position=TimelineMove.move(project.clips,from,target,after);
-                                if(position<0)return;
-                                selected=position;
-                                saveProject();refresh();
-                            });
-                        }catch(Exception ignored){toast("Clip konnte nicht verschoben werden.");}
+                        int insertion=event.getX()<v.getWidth()/2f?index:index+1;
+                        dropTimelineClip(event,insertion);
                         return true;
+                    case DragEvent.ACTION_DRAG_ENDED:
+                        markTimelineGap(-1);return true;
                     default:return true;
                 }
             });
         }
+        if(!project.clips.isEmpty())timeline.addView(makeTimelineGap(project.clips.size()),lp(16,112));
         selected=Math.max(0,Math.min(selected,Math.max(0,project.clips.size()-1)));
         selectionLabel.setText(project.clips.isEmpty()?"Noch keine Medien ausgewählt":
             "Clip "+(selected+1)+" von "+project.clips.size()+"  ·  "+project.clips.get(selected).name);

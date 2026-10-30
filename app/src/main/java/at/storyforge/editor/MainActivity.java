@@ -765,9 +765,9 @@ public final class MainActivity extends Activity {
         beginBlockingOperation("Dateien importieren · 0 / "+all.size());
         loading.setVisibility(View.VISIBLE);
         fileQueue.execute(()->{
-            String error=null;int count=0;
+            String error=null;int count=0,processedCount=0;
             for(Uri u:all){
-                final int processed=count;
+                final int processed=processedCount++;
                 final int totalFiles=all.size();
                 runOnUiThread(()->updateBlockingOperation(
                     "Dateien importieren · "+processed+" / "+totalFiles));
@@ -1308,7 +1308,15 @@ public final class MainActivity extends Activity {
             elapsed+=clip.length();
         }
         Bitmap frame=null;
-        try{frame=sourcePreviewBitmap(visibleClip);}catch(Exception ignored){}
+        try{
+            frame=sourcePreviewBitmap(visibleClip);
+            if(frame!=null){
+                Bitmap cropped=cropBitmap(frame,visibleClip.cropX,visibleClip.cropY,
+                    visibleClip.cropW,visibleClip.cropH);
+                if(cropped!=frame)frame.recycle();
+                frame=cropped;
+            }
+        }catch(Exception ignored){}
         final Bitmap previewFrame=frame;
         final double[] position={original.x,original.y};
         final float[] size={original.sizeSp};

@@ -72,6 +72,7 @@ public final class MainActivity extends Activity {
     };
     private int selected=0;
     private LinearLayout screen,timeline,captionList,audioList,stickerList;
+    private HorizontalScrollView timelineScroller;
     private int autoStyle=0,autoStartClipCount=0,autoMusicStartIndex=0;
     private boolean autoRequested=false;
     private FrameLayout previewContainer;
@@ -184,9 +185,9 @@ public final class MainActivity extends Activity {
 
         LinearLayout header=horizontal();TextView tl=text("ZEITLEISTE",11,CYAN,true);tl.setLetterSpacing(.12f);
         header.addView(tl,new LinearLayout.LayoutParams(0,-2,1));
-        TextView reorder=text("Lange halten = ziehen · 2 Finger = Zoom",10,MUTED,false);header.addView(reorder);
+        TextView reorder=text("Clip antippen und ziehen · 2 Finger = Zoom",10,MUTED,false);header.addView(reorder);
         screen.addView(header,margin(-1,-2,18));
-        HorizontalScrollView timelineScroll=new HorizontalScrollView(this);timelineScroll.setHorizontalScrollBarEnabled(false);
+        HorizontalScrollView timelineScroll=new HorizontalScrollView(this);timelineScroller=timelineScroll;timelineScroll.setHorizontalScrollBarEnabled(false);
         timeline=horizontal();timeline.setPadding(0,dp(9),dp(12),dp(9));timelineScroll.addView(timeline);
         ScaleGestureDetector zoom=new ScaleGestureDetector(this,new ScaleGestureDetector.SimpleOnScaleGestureListener(){
             @Override public boolean onScale(ScaleGestureDetector d){project.timelineZoom=Math.min(2.8,Math.max(.7,project.timelineZoom*d.getScaleFactor()));refresh();return true;}
@@ -205,6 +206,8 @@ public final class MainActivity extends Activity {
         screen.addView(row1,margin(-1,-2,8));
         TextView reversePhotos=pill("↩  Reihenfolge umkehren",SURFACE_2,this::reverseMediaDialog);
         screen.addView(reversePhotos,margin(-1,-2,8));
+        TextView dedupe=pill("▣ Doppelte Bilder prüfen",SURFACE_2,this::findDuplicatePhotos);
+        screen.addView(dedupe,margin(-1,-2,8));
         TextView auto=button("✦  AUTOMATISCHEN FILM ERSTELLEN",0xFF393052,this::startAutoWizard);
         screen.addView(auto,margin(-1,47,7));
         TextView undoAuto=pill("↶ Letzten automatischen Schnitt rückgängig",SURFACE,this::undoAutoFilm);
@@ -293,20 +296,65 @@ public final class MainActivity extends Activity {
             card.addView(text(time(c.length())+"   "+(i==0?"START":transitionLabel(c.transition)),10,MUTED,false));
             LinearLayout.LayoutParams p=lp((int)(124*project.timelineZoom),112);p.rightMargin=dp(7);timeline.addView(card,p);
             card.setOnClickListener(v->{stopPreview();selected=index;showSelected();refresh();});
-            card.setOnLongClickListener(v->{
-                v.startDragAndDrop(ClipData.newPlainText("clip",Integer.toString(index)),new View.DragShadowBuilder(v),null,0);return true;
+            final float[] touchStart=new float[2];
+            final boolean[] dragging={false};
+            card.setOnTouchListener((v,event)->{
+                int action=event.getActionMasked();
+                if(action==MotionEvent.ACTION_DOWN){
+                    touchStart[0]=event.getX();touchStart[1]=event.getY();dragging[0]=false;
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    return false; // Still allow a tap to select the clip.
+                }
+                if(action==MotionEvent.ACTION_MOVE && !dragging[0]){
+                    if(Math.hypot(event.getX()-touchStart[0],event.getY()-touchStart[1])>dp(10)){
+                        dragging[0]=true;
+                        v.cancelLongPress();
+                        ClipData data=ClipData.newPlainText("storyforge-clip",Integer.toString(index));
+                        v.startDragAndDrop(data,new View.DragShadowBuilder(v),null,0);
+                        v.getParent().requestDisallowInterceptTouchEvent(false);
+                        return true;
+                    }
+                }
+                if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                return dragging[0];
             });
             card.setOnDragListener((v,event)->{
-                if(event.getAction()!=DragEvent.ACTION_DROP)return true;
-                try{
-                    int from=Integer.parseInt(event.getClipData().getItemAt(0).getText().toString());
-                    if(from>=0&&from<project.clips.size()&&from!=index){
-                        Project.Clip moving=project.clips.remove(from);
-                        project.clips.add(Math.min(index,project.clips.size()),moving);
-                        selected=Math.min(index,project.clips.size()-1);saveProject();refresh();
-                    }
-                }catch(Exception ignored){toast("Verschieben fehlgeschlagen");}
-                return true;
+                switch(event.getAction()){
+                    case DragEvent.ACTION_DRAG_STARTED:
+                        return event.getClipDescription()!=null &&
+                            event.getClipDescription().hasMimeType("text/plain");
+                    case DragEvent.ACTION_DRAG_ENTERED:
+                        v.setAlpha(.6f);return true;
+                    case DragEvent.ACTION_DRAG_EXITED:
+                    case DragEvent.ACTION_DRAG_ENDED:
+                        v.setAlpha(1f);return true;
+                    case DragEvent.ACTION_DRAG_LOCATION:
+                        if(timelineScroller!=null){
+                            float visibleX=v.getX()+event.getX()-timelineScroller.getScrollX();
+                            if(visibleX<dp(44))timelineScroller.smoothScrollBy(-dp(25),0);
+                            if(visibleX>timelineScroller.getWidth()-dp(44))
+                                timelineScroller.smoothScrollBy(dp(25),0);
+                        }
+                        return true;
+                    case DragEvent.ACTION_DROP:
+                        v.setAlpha(1f);
+                        try{
+                            int from=Integer.parseInt(event.getClipData().getItemAt(0).getText().toString());
+                            if(from<0||from>=project.clips.size())return true;
+                            final int target=index;
+                            final boolean after=event.getX()>v.getWidth()/2f;
+                            main.post(()->{
+                                stopPreview();
+                                int position=TimelineMove.move(project.clips,from,target,after);
+                                if(position<0)return;
+                                selected=position;
+                                saveProject();refresh();
+                            });
+                        }catch(Exception ignored){toast("Clip konnte nicht verschoben werden.");}
+                        return true;
+                    default:return true;
+                }
             });
         }
         selected=Math.max(0,Math.min(selected,Math.max(0,project.clips.size()-1)));
@@ -830,6 +878,59 @@ public final class MainActivity extends Activity {
             })
             .setNegativeButton("Abbrechen",null)
             .show();
+    }
+    private void findDuplicatePhotos(){
+        if(project.clips.isEmpty()){toast("Bitte zuerst Fotos hinzufügen.");return;}
+        if(loading.getVisibility()==View.VISIBLE){toast("Bitte laufenden Import beenden.");return;}
+        final List<Project.Clip> snapshot=new ArrayList<>(project.clips);
+        int images=0;
+        for(Project.Clip c:snapshot)if(c.image)images++;
+        if(images<2){toast("Es sind nicht genug Fotos vorhanden.");return;}
+        loading.setVisibility(View.VISIBLE);
+        fileQueue.execute(()->{
+            final List<DuplicatePhotoScanner.Duplicate> duplicates=DuplicatePhotoScanner.scan(snapshot);
+            runOnUiThread(()->{
+                loading.setVisibility(View.GONE);
+                if(duplicates.isEmpty()){toast("Keine identischen Bilder gefunden.");return;}
+                if(snapshot.size()!=project.clips.size()){
+                    toast("Zeitleiste wurde verändert. Bitte erneut prüfen.");return;
+                }
+                for(int i=0;i<snapshot.size();i++)if(snapshot.get(i)!=project.clips.get(i)){
+                    toast("Zeitleiste wurde verändert. Bitte erneut prüfen.");return;
+                }
+                String[] labels=new String[duplicates.size()];
+                boolean[] selectedDuplicates=new boolean[duplicates.size()];
+                java.util.Arrays.fill(selectedDuplicates,true);
+                for(int i=0;i<duplicates.size();i++){
+                    DuplicatePhotoScanner.Duplicate item=duplicates.get(i);
+                    Project.Clip c=snapshot.get(item.index);
+                    labels[i]="Clip "+(item.index+1)+" · "+c.name+
+                        " (wie Clip "+(item.firstIndex+1)+")";
+                }
+                new AlertDialog.Builder(this).setTitle(duplicates.size()+" doppelte Fotos gefunden")
+                    .setMultiChoiceItems(labels,selectedDuplicates,(dialog,index,checked)->
+                        selectedDuplicates[index]=checked)
+                    .setPositiveButton("Ausgewählte entfernen",(dialog,which)->{
+                        if(snapshot.size()!=project.clips.size()){
+                            toast("Zeitleiste verändert. Bitte erneut prüfen.");return;
+                        }
+                        for(int i=0;i<snapshot.size();i++)if(snapshot.get(i)!=project.clips.get(i)){
+                            toast("Zeitleiste verändert. Bitte erneut prüfen.");return;
+                        }
+                        java.util.List<Integer> remove=new ArrayList<>();
+                        for(int i=0;i<duplicates.size();i++)if(selectedDuplicates[i])
+                            remove.add(duplicates.get(i).index);
+                        if(remove.isEmpty()){toast("Nichts ausgewählt.");return;}
+                        stopPreview();
+                        remove.sort(java.util.Collections.reverseOrder());
+                        for(int index:remove)project.clips.remove(index);
+                        selected=Math.min(selected,Math.max(0,project.clips.size()-1));
+                        saveProject();refresh();
+                        toast(remove.size()+" doppelte Einträge entfernt. Originalbilder bleiben erhalten.");
+                    })
+                    .setNegativeButton("Abbrechen",null).show();
+            });
+        });
     }
     private void editSelected(){
         if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}

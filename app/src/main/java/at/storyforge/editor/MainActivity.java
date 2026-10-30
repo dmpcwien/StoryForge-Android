@@ -1289,6 +1289,127 @@ public final class MainActivity extends Activity {
             }
         });
     }
+    /** Explicit save converts the current working film into a named editable film. */
+    private void promptSaveProject(){promptSaveProject(null);}
+    private void promptSaveProject(Runnable afterSave){
+        final EditText input=new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("z. B. Urlaub 2026 oder Santiagos Geburtstag");
+        input.setText(activeProjectName.isEmpty()?"":activeProjectName);
+        input.setSelectAllOnFocus(true);
+        LinearLayout layout=vertical();layout.setPadding(dp(20),dp(10),dp(20),0);
+        layout.addView(text("Name für dein bearbeitbares Projekt:",13,MUTED,false));
+        layout.addView(input);
+        AlertDialog.Builder builder=new AlertDialog.Builder(this)
+            .setTitle("Projekt speichern")
+            .setView(layout)
+            .setPositiveButton("Speichern",(d,w)->saveNamedProject(input.getText().toString(),false,afterSave))
+            .setNegativeButton("Abbrechen",null);
+        if(!activeProjectId.isEmpty())
+            builder.setNeutralButton("Als Kopie speichern",
+                (d,w)->saveNamedProject(input.getText().toString(),true,afterSave));
+        builder.show();
+    }
+    private void saveNamedProject(String name,boolean copy,Runnable afterSave){
+        try{
+            String key=copy||activeProjectId.isEmpty()?null:activeProjectId;
+            ProjectLibrary.Entry entry=projectLibrary.save(key,name,project);
+            activeProjectId=entry.id;
+            activeProjectName=entry.name;
+            getPreferences(MODE_PRIVATE).edit().putString("active_project_id",activeProjectId).apply();
+            saveProject();
+            refresh();
+            toast("Projekt „"+entry.name+"“ gespeichert. Änderungen werden automatisch gesichert.");
+            if(afterSave!=null)afterSave.run();
+        }catch(Exception ex){
+            new AlertDialog.Builder(this).setTitle("Projekt nicht gespeichert")
+                .setMessage(String.valueOf(ex.getMessage())).setPositiveButton("OK",null).show();
+        }
+    }
+    private void showSavedProjects(){
+        List<ProjectLibrary.Entry> entries=projectLibrary.list();
+        if(entries.isEmpty()){
+            new AlertDialog.Builder(this).setTitle("Gespeicherte Projekte")
+                .setMessage("Noch keine benannten Projekte vorhanden. Speichere deinen aktuellen Film zuerst.")
+                .setPositiveButton("Projekt speichern",(d,w)->promptSaveProject())
+                .setNegativeButton("Schließen",null).show();
+            return;
+        }
+        String[] labels=new String[entries.size()];
+        java.text.SimpleDateFormat formatter=
+            new java.text.SimpleDateFormat("dd.MM.yyyy  HH:mm",Locale.GERMANY);
+        for(int i=0;i<entries.size();i++){
+            ProjectLibrary.Entry e=entries.get(i);
+            labels[i]=e.name+"\n"+e.clipCount+" Clips  ·  "+
+                formatter.format(new java.util.Date(e.modified))+
+                (e.id.equals(activeProjectId)?"  ·  Aktuell":"");
+        }
+        new AlertDialog.Builder(this).setTitle("Gespeicherte Projekte öffnen")
+            .setItems(labels,(d,which)->{
+                ProjectLibrary.Entry chosen=entries.get(which);
+                if(chosen.id.equals(activeProjectId)){
+                    toast("Dieses Projekt ist bereits geöffnet.");return;
+                }
+                if(activeProjectId.isEmpty()&&!project.clips.isEmpty()){
+                    new AlertDialog.Builder(this).setTitle("Aktuellen Film behalten?")
+                        .setMessage("Dein aktueller Film hat noch keinen Namen. Speichere ihn zuerst, damit du ihn später wieder öffnen kannst.")
+                        .setPositiveButton("Zuerst speichern",(confirm,w)->promptSaveProject(()->openNamedProject(chosen)))
+                        .setNeutralButton("Ohne Speichern öffnen",(confirm,w)->openNamedProject(chosen))
+                        .setNegativeButton("Abbrechen",null).show();
+                }else openNamedProject(chosen);
+            }).setNegativeButton("Schließen",null).show();
+    }
+    private void openNamedProject(ProjectLibrary.Entry entry){
+        try{
+            Project loaded=projectLibrary.load(entry.id);
+            switchWorkingProject(loaded,entry.id,entry.name);
+            int missing=0;
+            for(Project.Clip clip:loaded.clips)if(clip.path==null||!new File(clip.path).isFile())missing++;
+            for(Project.AudioTrack track:loaded.audioTracks)
+                if(track.path!=null&&!track.path.isEmpty()&&!new File(track.path).isFile())missing++;
+            if(missing>0){
+                new AlertDialog.Builder(this).setTitle("Projekt geladen · Medien fehlen")
+                    .setMessage(missing+" Medien-Datei(en) sind nicht mehr vorhanden. Die Einträge bleiben im Projekt erhalten. Für ein vollständiges Backup nutze die ZIP-Sicherung.")
+                    .setPositiveButton("OK",null).show();
+            }else toast("„"+entry.name+"“ geöffnet. Du kannst weiterarbeiten.");
+        }catch(Exception ex){
+            new AlertDialog.Builder(this).setTitle("Projekt konnte nicht geladen werden")
+                .setMessage(String.valueOf(ex.getMessage())).setPositiveButton("OK",null).show();
+        }
+    }
+    private void promptNewProject(){
+        new AlertDialog.Builder(this).setTitle("Neuen Film beginnen?")
+            .setMessage(activeProjectId.isEmpty()&&!project.clips.isEmpty()
+                ?"Dein aktueller Film hat noch keinen Namen. Du kannst ihn zuerst speichern, damit er erhalten bleibt."
+                :"Dein bisheriges benanntes Projekt bleibt gespeichert. Ein neuer, leerer Film wird geöffnet.")
+            .setPositiveButton("Neuen Film",(d,w)->createNewProject())
+            .setNeutralButton("Zuerst speichern",(d,w)->promptSaveProject(this::createNewProject))
+            .setNegativeButton("Abbrechen",null).show();
+    }
+    private void createNewProject(){
+        try{
+            switchWorkingProject(new Project(),"","");
+            toast("Neuer Film geöffnet. Speichere ihn unter einem Namen.");
+        }catch(Exception ex){toast("Neues Projekt fehlgeschlagen: "+ex.getMessage());}
+    }
+    /** Switch working copy atomically and prevent undo across separate films. */
+    private void switchWorkingProject(Project next,String id,String name)throws Exception{
+        if(next==null)throw new IllegalArgumentException("Ungültiges Projekt.");
+        saveProject();
+        byte[] data=next.toJson().toString(2).getBytes(StandardCharsets.UTF_8);
+        ProjectHistory.atomicWrite(projectFile(),data);
+        ProjectHistory.clear(getFilesDir());
+        stopPreview();
+        project=next;
+        activeProjectId=id==null?"":id;
+        activeProjectName=name==null?"":name;
+        getPreferences(MODE_PRIVATE).edit().putString("active_project_id",activeProjectId).apply();
+        thumbCache.evictAll();selected=0;refresh();
+    }
+    private void saveNamedSnapshotOnly()throws Exception{
+        if(!activeProjectId.isEmpty())
+            projectLibrary.save(activeProjectId,activeProjectName,project);
+    }
     private void saveBackup(){
         if(project.clips.isEmpty()){toast("Bitte zuerst ein Projekt erstellen.");return;}
         Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);
@@ -1537,7 +1658,7 @@ public final class MainActivity extends Activity {
             Project loaded=Project.fromJson(new JSONObject(new String(bytes,StandardCharsets.UTF_8)));
             // Never silently drop inaccessible media: keep editable references
             // and warn when reopening a named project instead.
-            if(!TextUtils.isEmpty(loaded.musicPath)&&!new File(loaded.musicPath).exists()){loaded.musicPath="";loaded.musicName="";}
+            // Keep missing music references intact for later recovery; never silently discard them.
             project=loaded;
         }catch(Exception ex){android.util.Log.e("StoryForge","Projekt laden",ex);}
     }

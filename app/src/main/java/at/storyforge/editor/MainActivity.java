@@ -1369,15 +1369,15 @@ public final class MainActivity extends Activity {
             @Override public void onStopTrackingTouch(SeekBar bar){}
         });
         updateCaption.run();
-        AlertDialog editor=new AlertDialog.Builder(this)
+        AlertDialog.Builder editorBuilder=new AlertDialog.Builder(this)
             .setTitle(index<0?"Text einfügen – Clipvorschau":"Text bearbeiten – Clipvorschau")
             .setView(scroll)
             .setPositiveButton("Speichern",null)
-            .setNeutralButton(index<0?"Zurücksetzen":"Löschen",(d,w)->{
-                if(index>=0){project.captions.remove(index);saveProject();refresh();}
-            })
-            .setNegativeButton("Abbrechen",null)
-            .create();
+            .setNegativeButton("Abbrechen",null);
+        if(index>=0)editorBuilder.setNeutralButton("Text löschen",(d,w)->{
+            project.captions.remove(index);saveProject();refresh();
+        });
+        AlertDialog editor=editorBuilder.create();
         editor.setOnShowListener(d->{
             editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
                 try{

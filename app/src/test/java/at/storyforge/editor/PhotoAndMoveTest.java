@@ -48,4 +48,28 @@ public final class PhotoAndMoveTest {
             dir.delete();
         }
     }
+
+    @Test public void dropIntoGapBetweenClipsAndAtEitherEnd(){
+        Project.Clip a=c("A",true,"/a"),b=c("B",true,"/b"),
+            cc=c("C",false,"/c"),d=c("D",true,"/d");
+        List<Project.Clip> list=new ArrayList<>(Arrays.asList(a,b,cc,d));
+        assertEquals(2,TimelineMove.moveToGap(list,0,3));
+        assertEquals(Arrays.asList(b,cc,a,d),list);
+        assertEquals(0,TimelineMove.moveToGap(list,2,0));
+        assertEquals(Arrays.asList(a,b,cc,d),list);
+        assertEquals(3,TimelineMove.moveToGap(list,0,4));
+        assertEquals(Arrays.asList(b,cc,d,a),list);
+        assertEquals(1,TimelineMove.moveToGap(list,3,1));
+        assertEquals(Arrays.asList(b,a,cc,d),list);
+    }
+    @Test public void droppingToOwnBoundaryOrInvalidGapDoesNothing(){
+        List<Project.Clip> xs=new ArrayList<>(Arrays.asList(
+            c("A",true,"/a"),c("B",true,"/b"),c("C",true,"/c")));
+        assertEquals(-1,TimelineMove.moveToGap(xs,1,1)); // left of self
+        assertEquals(-1,TimelineMove.moveToGap(xs,1,2)); // right of self
+        assertEquals(-1,TimelineMove.moveToGap(xs,1,-1));
+        assertEquals(-1,TimelineMove.moveToGap(xs,1,4));
+        assertEquals("A",xs.get(0).name);
+        assertEquals("B",xs.get(1).name);
+    }
 }

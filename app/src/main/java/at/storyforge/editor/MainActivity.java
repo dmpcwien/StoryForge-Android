@@ -181,8 +181,8 @@ public final class MainActivity extends Activity {
         previewContainer.addView(previewVideo,new FrameLayout.LayoutParams(-1,-1));
         previewVideo.setVisibility(View.GONE);
         previewText=text("",27,WHITE,true);previewText.setShadowLayer(dp(5),0,dp(2),Color.BLACK);
-        previewText.setGravity(Gravity.CENTER);FrameLayout.LayoutParams textPos=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);
-        textPos.setMargins(dp(14),0,dp(14),dp(60));previewContainer.addView(previewText,textPos);
+        previewText.setGravity(Gravity.CENTER);
+        previewContainer.addView(previewText,new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT));
         previewLabel=text("MEDIEN HINZUFÜGEN",11,WHITE,true);previewLabel.setLetterSpacing(.1f);
         previewLabel.setBackground(panel(0xBB101523,6));previewLabel.setPadding(dp(8),dp(6),dp(8),dp(6));
         FrameLayout.LayoutParams badgeParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.LEFT);
@@ -526,13 +526,57 @@ public final class MainActivity extends Activity {
         int height=Math.max(1,Math.min(ih-top,(int)Math.round(ih*h)));
         return Bitmap.createBitmap(input,left,top,width,height);
     }
+    private Project.Caption findCaptionAt(double seconds){
+        for(Project.Caption caption:project.captions)
+            if(seconds>=caption.start&&seconds<caption.end)return caption;
+        return null;
+    }
+    /** Position the screen preview the same way as makeCaptionBitmap() in ExportEngine. */
+    private void updatePreviewCaption(Project.Caption caption){
+        if(previewText==null||previewContainer==null)return;
+        if(caption==null||TextUtils.isEmpty(caption.text)){
+            previewText.setText("");
+            previewText.setVisibility(View.GONE);
+            return;
+        }
+        previewText.setVisibility(View.VISIBLE);
+        previewText.setText(caption.text);
+        previewText.setTextColor(caption.color);
+        final int width=previewContainer.getWidth();
+        final int height=previewContainer.getHeight();
+        if(width<=0||height<=0){
+            previewContainer.post(()->{
+                if(!isFinishing()&&previewContainer!=null)updatePreviewCaption(caption);
+            });
+            return;
+        }
+        int textWidth=Math.max(1,(int)(width*.88));
+        previewText.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+            caption.sizeSp*(width/1080f));
+        previewText.measure(
+            View.MeasureSpec.makeMeasureSpec(textWidth,View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED));
+        int textHeight=previewText.getMeasuredHeight();
+        int left=Math.max(0,Math.min(width-textWidth,
+            (int)(width*caption.x-textWidth/2.0)));
+        int top=Math.max(0,Math.min(height-textHeight,
+            (int)(height*caption.y-textHeight/2.0)));
+        FrameLayout.LayoutParams params=new FrameLayout.LayoutParams(
+            textWidth,-2,Gravity.TOP|Gravity.LEFT);
+        params.leftMargin=left;params.topMargin=top;
+        previewText.setLayoutParams(params);
+    }
     private void showSelected(){
-        previewText.setText("");
+        updatePreviewCaption(null);
         if(project.clips.isEmpty()){
             previewImage.setImageDrawable(null);previewImage.setVisibility(View.VISIBLE);previewVideo.setVisibility(View.GONE);
             previewLabel.setText("START / LEERES PROJEKT");return;
         }
         showClip(selected,false);
+        double position=0;
+        for(int i=0;i<selected&&i<project.clips.size();i++)
+            position+=project.clips.get(i).length();
+        updatePreviewCaption(findCaptionAt(position));
     }
     private void showClip(int index,boolean autoPlay){
         if(index<0||index>=project.clips.size())return;
@@ -1652,10 +1696,7 @@ public final class MainActivity extends Activity {
             Project.Clip c=project.clips.get(previewIndex);
             long elapsed=SystemClock.elapsedRealtime()-previewStartedAt;
             double global=previewElapsedOffsetMs/1000.0+elapsed/1000.0;
-            String title="";
-            for(Project.Caption caption:project.captions)
-                if(global>=caption.start&&global<=caption.end){title=caption.text;break;}
-            previewText.setText(title);
+            updatePreviewCaption(findCaptionAt(global));
             totalLabel.setText(time(global)+" / "+time(project.duration()));
             syncPlaylistPreview(global);
             if(elapsed>=c.length()*1000){

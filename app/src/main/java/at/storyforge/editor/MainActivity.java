@@ -208,8 +208,9 @@ public final class MainActivity extends Activity {
 
         LinearLayout header=horizontal();TextView tl=text("ZEITLEISTE",11,CYAN,true);tl.setLetterSpacing(.12f);
         header.addView(tl,new LinearLayout.LayoutParams(0,-2,1));
-        TextView reorder=text("Clip antippen und ziehen · 2 Finger = Zoom",10,MUTED,false);header.addView(reorder);
-        screen.addView(header,margin(-1,-2,18));
+        screen.addView(header,margin(-1,-2,5));
+        screen.addView(text("1,5 s halten = verschieben (Vibration) · Wischen = scrollen",
+            11,MUTED,false),margin(-1,-2,10));
         HorizontalScrollView timelineScroll=new HorizontalScrollView(this);timelineScroller=timelineScroll;timelineScroll.setHorizontalScrollBarEnabled(false);
         timeline=horizontal();timeline.setPadding(0,dp(9),dp(12),dp(9));timelineScroll.addView(timeline);
         ScaleGestureDetector zoom=new ScaleGestureDetector(this,new ScaleGestureDetector.SimpleOnScaleGestureListener(){

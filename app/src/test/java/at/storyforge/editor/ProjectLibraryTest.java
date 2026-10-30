@@ -84,4 +84,30 @@ public final class ProjectLibraryTest {
             assertEquals("clip",lib.load(saved.id).clips.get(0).name);
         }finally{deleteRecursively(root);}
     }
+    @Test public void captionSizePositionAndTimelinePersistAfterReopening()throws Exception{
+        File folder=Files.createTempDirectory("storyforge-caption-").toFile();
+        try{
+            ProjectLibrary library=new ProjectLibrary(folder);
+            Project editing=project("captionDemo");
+            Project.Caption caption=editing.captions.get(0);
+            caption.text="Film Titel";caption.x=.23;caption.y=.61;caption.sizeSp=112;
+            ProjectLibrary.Entry saved=library.save(null,"Texte verschieben",editing);
+            Project reopened=library.load(saved.id);
+            Project.Caption restored=reopened.captions.get(0);
+            assertEquals("Film Titel",restored.text);
+            assertEquals(.23,restored.x,1e-9);
+            assertEquals(.61,restored.y,1e-9);
+            assertEquals(112,restored.sizeSp,0);
+            assertEquals(1,reopened.clips.size());
+        }finally{deleteRecursively(folder);}
+    }
+    @Test public void olderCaptionsWithoutPositionKeepDefaultValues()throws Exception{
+        org.json.JSONObject previous=new org.json.JSONObject()
+            .put("text","Altprojekt").put("start",0).put("end",3);
+        Project.Caption caption=Project.Caption.fromJson(previous);
+        assertEquals(.5,caption.x,1e-9);
+        assertEquals(.78,caption.y,1e-9);
+        assertEquals(44,caption.sizeSp,0);
+    }
+
 }

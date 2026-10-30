@@ -401,7 +401,7 @@ public final class MainActivity extends Activity {
                             boolean started=v.startDragAndDrop(data,new View.DragShadowBuilder(v),null,0);
                             if(started){
                                 dragging[0]=true;
-                                v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                                v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
                             }
                         };
                         v.postDelayed(pendingDrag[0],1500L);

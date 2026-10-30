@@ -15,5 +15,17 @@ final class TimelineMove {
         clips.add(insertion,moving);
         return insertion;
     }
+    /** Gap 0 is before the first clip; gap size is after the last clip.
+     * The dragged clip is removed before inserting into its new position.
+     */
+    static int moveToGap(List<Project.Clip> clips,int from,int gap){
+        if(clips==null || clips.isEmpty() || from<0 || from>=clips.size()
+            || gap<0 || gap>clips.size())return -1;
+        int position=gap-(from<gap?1:0);
+        if(position==from)return -1;
+        Project.Clip item=clips.remove(from);
+        clips.add(position,item);
+        return position;
+    }
     private TimelineMove(){}
 }

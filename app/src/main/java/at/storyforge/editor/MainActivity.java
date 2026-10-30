@@ -22,6 +22,8 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.OpenableColumns;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -85,6 +87,8 @@ public final class MainActivity extends Activity {
     private VideoView previewVideo;
     private TextView previewLabel,previewText,totalLabel,musicLabel,selectionLabel,playButton;
     private ProgressBar loading;
+    private AlertDialog blockingOperation;
+    private TextView blockingStatus;
     private AlertDialog exportDialog;
     private ExportEngine exporter,previewRenderer;
     private boolean historyRestoring=false;
@@ -1697,6 +1701,36 @@ public final class MainActivity extends Activity {
         refreshPreviewButtons();
         keepScreenAwake();
         if(totalLabel!=null)totalLabel.setText(project.clips.size()+" Clips   ·   "+time(project.duration()));
+    }
+    private void beginBlockingOperation(String description){
+        if(blockingOperation!=null)return;
+        LinearLayout wrap=vertical();
+        wrap.setPadding(dp(27),dp(24),dp(27),dp(24));
+        wrap.setGravity(Gravity.CENTER);
+        ProgressBar spinner=new ProgressBar(this);
+        spinner.setIndeterminate(true);
+        wrap.addView(spinner,lp(46,46));
+        blockingStatus=text(description,15,WHITE,true);
+        blockingStatus.setGravity(Gravity.CENTER);
+        wrap.addView(blockingStatus,margin(-1,-2,18));
+        TextView hint=text("Bitte nicht schließen · Bearbeitung gesperrt",12,MUTED,false);
+        hint.setGravity(Gravity.CENTER);
+        wrap.addView(hint,margin(-1,-2,8));
+        blockingOperation=new AlertDialog.Builder(this)
+            .setTitle("StoryForge verarbeitet Dateien")
+            .setView(wrap)
+            .setCancelable(false)
+            .create();
+        blockingOperation.setCanceledOnTouchOutside(false);
+        blockingOperation.show();
+    }
+    private void updateBlockingOperation(String description){
+        if(blockingStatus!=null)blockingStatus.setText(description);
+    }
+    private void endBlockingOperation(){
+        if(blockingOperation!=null){
+            blockingOperation.dismiss();blockingOperation=null;blockingStatus=null;
+        }
     }
     private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_SHORT).show();}
     private File projectFile(){return new File(getFilesDir(),"project.json");}

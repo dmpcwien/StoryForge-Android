@@ -46,6 +46,10 @@ final class ProjectHistory {
         atomicWrite(current,payload);
         return result;
     }
+    static void clear(File directory){
+        for(String kind:new String[]{"undo","redo"})
+            for(int index=1;index<=LIMIT;index++)path(directory,kind,index).delete();
+    }
     static void atomicWrite(File destination,byte[] data)throws Exception{
         File tmp=new File(destination.getParentFile(),destination.getName()+".next");
         Files.write(tmp.toPath(),data);

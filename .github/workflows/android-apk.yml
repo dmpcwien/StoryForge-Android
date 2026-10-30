@@ -56,19 +56,19 @@ jobs:
         run: |
           if [[ "$SIGNING_MODE" == "stable" ]]; then
             gradle --no-daemon :app:assembleRelease
-            cp app/build/outputs/apk/release/app-release.apk StoryForge-v1.3.5.apk
+            cp app/build/outputs/apk/release/app-release.apk StoryForge-v1.3.6.apk
           else
             gradle --no-daemon :app:assembleDebug
-            cp app/build/outputs/apk/debug/app-debug.apk StoryForge-v1.3.5.apk
+            cp app/build/outputs/apk/debug/app-debug.apk StoryForge-v1.3.6.apk
           fi
-          test -s StoryForge-v1.3.5.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose StoryForge-v1.3.5.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging StoryForge-v1.3.5.apk | head -n 3
+          test -s StoryForge-v1.3.6.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose StoryForge-v1.3.6.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging StoryForge-v1.3.6.apk | head -n 3
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
           name: StoryForge-1.3-APK
-          path: StoryForge-v1.3.5.apk
+          path: StoryForge-v1.3.6.apk
           if-no-files-found: error
       - name: Publish GitHub release
         shell: bash
@@ -76,16 +76,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "$SIGNING_MODE" == "stable" ]]; then
-            TAG=v1.3.5-signed
-            NOTES="StoryForge 1.3.5 mit einem dauerhaft konfigurierten Zertifikat signiert. Updates funktionieren nur bei gleicher Signatur wie die installierte App."
+            TAG=v1.3.6-signed
+            NOTES="StoryForge 1.3.6 mit einem dauerhaft konfigurierten Zertifikat signiert. Updates funktionieren nur bei gleicher Signatur wie die installierte App."
           else
-            TAG=v1.3.5-debug
-            NOTES="StoryForge 1.3.5 Test-APK mit temporaerer GitHub Debug-Signatur. Bestehende Installation vorerst nicht loeschen; lokale Projekt-Backups sichern!"
+            TAG=v1.3.6-debug
+            NOTES="StoryForge 1.3.6 Test-APK mit temporaerer GitHub Debug-Signatur. Bestehende Installation vorerst nicht loeschen; lokale Projekt-Backups sichern!"
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" StoryForge-v1.3.5.apk --clobber
+            gh release upload "$TAG" StoryForge-v1.3.6.apk --clobber
           else
-            gh release create "$TAG" StoryForge-v1.3.5.apk --title "StoryForge 1.3.5 ($SIGNING_MODE)" --notes "$NOTES"
+            gh release create "$TAG" StoryForge-v1.3.6.apk --title "StoryForge 1.3.6 ($SIGNING_MODE)" --notes "$NOTES"
           fi
       - name: Record APK build result
         if: always()

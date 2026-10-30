@@ -67,6 +67,9 @@ public final class MainActivity extends Activity {
     private final ExecutorService fileQueue=Executors.newSingleThreadExecutor();
     private final Handler main=new Handler(Looper.getMainLooper());
     private Project project=new Project();
+    private ProjectLibrary projectLibrary;
+    private String activeProjectId="", activeProjectName="";
+    private TextView projectNameLabel;
     private final android.util.LruCache<String,Bitmap> thumbCache=new android.util.LruCache<String,Bitmap>(10 * 1024 * 1024){
         @Override protected int sizeOf(String key,Bitmap value){return value.getByteCount();}
     };
@@ -101,6 +104,12 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle b){
         super.onCreate(b);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
         getWindow().getDecorView().setSystemUiVisibility(0);
+        projectLibrary=new ProjectLibrary(getFilesDir());
+        activeProjectId=getPreferences(MODE_PRIVATE).getString("active_project_id","");
+        if(!activeProjectId.isEmpty()){
+            try{activeProjectName=projectLibrary.entry(activeProjectId).name;}
+            catch(Exception ex){activeProjectId="";activeProjectName="";}
+        }
         loadProject();exporter=new ExportEngine(this);previewRenderer=new ExportEngine(this);
         buildUi();refresh();
         if(android.os.Build.VERSION.SDK_INT>=33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)
@@ -144,7 +153,19 @@ public final class MainActivity extends Activity {
         brand.addView(brandLeft,new LinearLayout.LayoutParams(0,-2,1));
         TextView export=button("↗ Export",0xFF744DD7,this::startExport);
         brand.addView(export,lp(108,44));screen.addView(brand);
-        addSpacer(screen,18);
+        projectNameLabel=text("PROJEKT",12,CYAN,true);
+        screen.addView(projectNameLabel,margin(-1,-2,10));
+        LinearLayout projectActions=horizontal();
+        projectActions.addView(pill("💾 Speichern",SURFACE,this::promptSaveProject),
+            new LinearLayout.LayoutParams(0,-2,1));
+        TextView openProjects=pill("📁 Öffnen",SURFACE,this::showSavedProjects);
+        LinearLayout.LayoutParams openParams=new LinearLayout.LayoutParams(0,-2,1);
+        openParams.leftMargin=dp(5);projectActions.addView(openProjects,openParams);
+        TextView newProject=pill("＋ Neu",SURFACE,this::promptNewProject);
+        LinearLayout.LayoutParams newParams=new LinearLayout.LayoutParams(0,-2,1);
+        newParams.leftMargin=dp(5);projectActions.addView(newProject,newParams);
+        screen.addView(projectActions,margin(-1,-2,8));
+        addSpacer(screen,10);
 
         previewContainer=new FrameLayout(this);previewContainer.setBackground(panel(Color.BLACK,18));
         previewContainer.setClipToOutline(true);
@@ -275,6 +296,10 @@ public final class MainActivity extends Activity {
     }
     private String time(double seconds){int s=(int)Math.max(0,seconds);return String.format(Locale.GERMANY,"%02d:%02d",s/60,s%60);}
     private void refresh(){
+        if(projectNameLabel!=null)
+            projectNameLabel.setText(activeProjectId.isEmpty()?
+                "AKTUELLER FILM  ·  Noch nicht benannt":
+                "PROJEKT  ·  "+activeProjectName+"  ·  Automatisch gesichert");
         if(timeline==null)return;
         timeline.removeAllViews();
         if(project.clips.isEmpty()){
@@ -601,8 +626,14 @@ public final class MainActivity extends Activity {
                     try{
                         Project restored=ProjectBackup.read(this,target);
                         runOnUiThread(()->{
-                            project=restored;selected=0;stopPreview();saveProject();refresh();
-                            loading.setVisibility(View.GONE);toast("Projektsicherung wiederhergestellt.");
+                            try{
+                                switchWorkingProject(restored,"","");
+                                loading.setVisibility(View.GONE);
+                                toast("Projektsicherung wiederhergestellt. Bitte unter einem Namen speichern.");
+                            }catch(Exception ex){
+                                loading.setVisibility(View.GONE);
+                                toast("Wiederherstellung fehlgeschlagen: "+ex.getMessage());
+                            }
                         });
                     }catch(Exception ex){
                         String msg=ex.getMessage();
@@ -1277,11 +1308,13 @@ public final class MainActivity extends Activity {
             }).setNegativeButton("Abbrechen",null).show();
     }
     private void undoProject(){
-        try{stopPreview();project=ProjectHistory.travel(getFilesDir(),true);selected=0;refresh();}
+        try{stopPreview();project=ProjectHistory.travel(getFilesDir(),true);
+            saveNamedSnapshotOnly();selected=0;refresh();}
         catch(Exception ex){toast(ex.getMessage());}
     }
     private void redoProject(){
-        try{stopPreview();project=ProjectHistory.travel(getFilesDir(),false);selected=0;refresh();}
+        try{stopPreview();project=ProjectHistory.travel(getFilesDir(),false);
+            saveNamedSnapshotOnly();selected=0;refresh();}
         catch(Exception ex){toast(ex.getMessage());}
     }
     private void share(Uri uri){
@@ -1493,6 +1526,7 @@ public final class MainActivity extends Activity {
             byte[] data=project.toJson().toString(2).getBytes(StandardCharsets.UTF_8);
             ProjectHistory.saveSnapshot(getFilesDir(),projectFile(),data);
             ProjectHistory.atomicWrite(projectFile(),data);
+            saveNamedSnapshotOnly();
         }catch(Exception ex){android.util.Log.e("StoryForge","Projekt speichern",ex);}
     }
     private void loadProject(){
@@ -1501,12 +1535,12 @@ public final class MainActivity extends Activity {
                 int offset=0,n;while(offset<bytes.length&&(n=input.read(bytes,offset,bytes.length-offset))!=-1)offset+=n;
             }
             Project loaded=Project.fromJson(new JSONObject(new String(bytes,StandardCharsets.UTF_8)));
-            // If originals were erased, keep only accessible clips.
-            loaded.clips.removeIf(c->!new File(c.path).isFile());
+            // Never silently drop inaccessible media: keep editable references
+            // and warn when reopening a named project instead.
             if(!TextUtils.isEmpty(loaded.musicPath)&&!new File(loaded.musicPath).exists()){loaded.musicPath="";loaded.musicName="";}
             project=loaded;
         }catch(Exception ex){android.util.Log.e("StoryForge","Projekt laden",ex);}
     }
-    @Override protected void onPause(){super.onPause();stopPreview();}
+    @Override protected void onPause(){saveProject();super.onPause();stopPreview();}
     @Override protected void onDestroy(){stopPreview();fileQueue.shutdown();super.onDestroy();}
 }

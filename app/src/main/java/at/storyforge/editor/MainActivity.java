@@ -669,13 +669,16 @@ public final class MainActivity extends Activity {
         if(request==PICK_BACKUP_SAVE){
             Uri target=data.getData();
             if(target!=null){
+                beginBlockingOperation("Projekt mit Medien sichern …");
                 loading.setVisibility(View.VISIBLE);
                 fileQueue.execute(()->{
                     String message;
                     try{ProjectBackup.write(this,project,target);message="Projekt inklusive Medien gesichert.";}
                     catch(Exception ex){message="Backup-Fehler: "+ex.getMessage();}
                     final String done=message;
-                    runOnUiThread(()->{loading.setVisibility(View.GONE);toast(done);});
+                    runOnUiThread(()->{
+                        loading.setVisibility(View.GONE);endBlockingOperation();toast(done);
+                    });
                 });
             }
             return;
@@ -683,6 +686,7 @@ public final class MainActivity extends Activity {
         if(request==PICK_BACKUP_LOAD){
             Uri target=data.getData();
             if(target!=null){
+                beginBlockingOperation("Projektsicherung laden …");
                 loading.setVisibility(View.VISIBLE);
                 fileQueue.execute(()->{
                     try{
@@ -691,15 +695,20 @@ public final class MainActivity extends Activity {
                             try{
                                 switchWorkingProject(restored,"","");
                                 loading.setVisibility(View.GONE);
+                                endBlockingOperation();
                                 toast("Projektsicherung wiederhergestellt. Bitte unter einem Namen speichern.");
                             }catch(Exception ex){
                                 loading.setVisibility(View.GONE);
+                                endBlockingOperation();
                                 toast("Wiederherstellung fehlgeschlagen: "+ex.getMessage());
                             }
                         });
                     }catch(Exception ex){
                         String msg=ex.getMessage();
-                        runOnUiThread(()->{loading.setVisibility(View.GONE);toast("Sicherung ungültig: "+msg);});
+                        runOnUiThread(()->{
+                            loading.setVisibility(View.GONE);endBlockingOperation();
+                            toast("Sicherung ungültig: "+msg);
+                        });
                     }
                 });
             }
@@ -709,10 +718,15 @@ public final class MainActivity extends Activity {
         if(data.getClipData()!=null)for(int i=0;i<data.getClipData().getItemCount();i++)all.add(data.getClipData().getItemAt(i).getUri());
         else if(data.getData()!=null)all.add(data.getData());
         if(all.isEmpty()){if(request==PICK_AUTO_MEDIA)autoRequested=false;return;}
+        beginBlockingOperation("Dateien importieren · 0 / "+all.size());
         loading.setVisibility(View.VISIBLE);
         fileQueue.execute(()->{
             String error=null;int count=0;
             for(Uri u:all){
+                final int processed=count;
+                final int totalFiles=all.size();
+                runOnUiThread(()->updateBlockingOperation(
+                    "Dateien importieren · "+processed+" / "+totalFiles));
                 try{
                     String mime=getContentResolver().getType(u);
                     boolean music=request==PICK_MUSIC||request==PICK_LAYER_AUDIO||request==PICK_AUTO_MUSIC||request==PICK_PLAYLIST;
@@ -776,7 +790,8 @@ public final class MainActivity extends Activity {
             }
             saveProject();String issue=error;int added=count;
             runOnUiThread(()->{
-                loading.setVisibility(View.GONE);refresh();
+                loading.setVisibility(View.GONE);
+                endBlockingOperation();refresh();
                 if(request==PICK_AUTO_MEDIA&&autoRequested){if(added>0)openAutoMusicPicker();else{autoRequested=false;toast("Keine Medien importiert.");}}
                 if(request==PICK_AUTO_MUSIC&&autoRequested)applyAutoFilm();
                 if(request==PICK_PLAYLIST&&added>0)toast("Playlist erstellt. Mit ↑ ↓ kannst du die Reihenfolge ändern.");

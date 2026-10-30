@@ -1243,33 +1243,110 @@ public final class MainActivity extends Activity {
     }
     private void addCaption(){
         if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}
-        Project.Caption c=new Project.Caption();c.text="Mein Text";c.start=0;c.end=Math.min(4,project.duration());
+        Project.Caption c=new Project.Caption();c.text="Mein Text";
+        double position=0;
+        for(int i=0;i<selected&&i<project.clips.size();i++)
+            position+=project.clips.get(i).length();
+        c.start=Math.max(0,Math.min(position,Math.max(0,project.duration()-.2)));
+        c.end=Math.min(project.duration(),c.start+4);
         captionDialog(c,-1);
     }
     private void editCaption(int idx){captionDialog(project.captions.get(idx),idx);}
-    private void captionDialog(Project.Caption old,int index){
-        LinearLayout l=vertical();l.setPadding(dp(20),dp(5),dp(20),dp(10));
-        EditText title=new EditText(this);title.setText(old.text);title.setHint("Text eingeben");
-        EditText start=number(old.start),end=number(old.end),size=number(old.sizeSp);
-        EditText vertical=number(old.y*100);
-        l.addView(field("Dein Text",title));l.addView(field("Einblenden ab (Sekunden)",start));
-        l.addView(field("Ausblenden bei (Sekunden)",end));l.addView(field("Schriftgröße",size));
-        l.addView(field("Höhe auf dem Bild (0–100 %, unten = 85)",vertical));
-        new AlertDialog.Builder(this).setTitle(index<0?"Text einfügen":"Text bearbeiten").setView(l)
-            .setPositiveButton("Speichern",(dialog,which)->{
-                try{
-                    String t=title.getText().toString().trim();double a=parse(start),b=parse(end);
-                    if(t.isEmpty()||a<0||b<=a||b>project.duration()+.2)throw new Exception("Ungültiger Text oder Zeitbereich.");
-                    old.text=t;old.start=a;old.end=b;
-                    old.sizeSp=(float)Math.max(16,Math.min(140,parse(size)));
-                    old.y=Math.max(.1,Math.min(.9,parse(vertical)/100));
-                    if(index<0)project.captions.add(old);
-                    saveProject();refresh();
-                }catch(Exception ex){toast("Text/Zeit ungültig. Ende darf die Filmlänge nicht überschreiten.");}
-            })
-            .setNeutralButton(index<0?"Abbrechen":"Löschen",(d,w)->{
+    private void captionDialog(Project.Caption original,int index){
+        if(project.clips.isEmpty()){toast("Kein Clip für Textvorschau vorhanden.");return;}
+        // Show the clip that contains the caption's starting time.
+        double elapsed=0;
+        Project.Clip visibleClip=project.clips.get(Math.max(0,Math.min(selected,project.clips.size()-1)));
+        for(Project.Clip clip:project.clips){
+            if(original.start>=elapsed&&original.start<elapsed+clip.length()){
+                visibleClip=clip;break;
+            }
+            elapsed+=clip.length();
+        }
+        Bitmap frame=null;
+        try{frame=sourcePreviewBitmap(visibleClip);}catch(Exception ignored){}
+        final Bitmap previewFrame=frame;
+        final double[] position={original.x,original.y};
+        final float[] size={original.sizeSp};
+        ScrollView scroll=new ScrollView(this);
+        scroll.setFillViewport(false);
+        LinearLayout body=vertical();body.setPadding(dp(16),dp(5),dp(16),dp(12));
+        scroll.addView(body);
+        TextView hint=text("Text im Bild mit dem Finger verschieben · Größe unten einstellen",
+            12,CYAN,false);
+        body.addView(hint,margin(-1,-2,8));
+        CaptionPreviewView preview=new CaptionPreviewView(this,previewFrame);
+        body.addView(preview,lp(-1,220));
+        TextView xyLabel=text("",11,MUTED,false);
+        body.addView(xyLabel,margin(-1,-2,8));
+        final Runnable updatePosition=()->xyLabel.setText(
+            "Position: "+Math.round(position[0]*100)+" % links · "+
+            Math.round(position[1]*100)+" % oben");
+        preview.setPositionChanged((x,y)->{
+            position[0]=x;position[1]=y;updatePosition.run();
+        });
+        updatePosition.run();
+        TextView sizeLabel=text("Schriftgröße: "+Math.round(size[0]),13,WHITE,true);
+        body.addView(sizeLabel,margin(-1,-2,3));
+        SeekBar sizeSlider=new SeekBar(this);
+        sizeSlider.setMax(124);
+        sizeSlider.setProgress(Math.max(0,Math.min(124,Math.round(size[0])-16)));
+        body.addView(sizeSlider,margin(-1,-2,8));
+        EditText title=new EditText(this);title.setText(original.text);title.setHint("Text eingeben");
+        title.setSingleLine(false);title.setMinLines(1);title.setMaxLines(3);
+        EditText start=number(original.start),end=number(original.end);
+        body.addView(field("Dein Text",title));
+        body.addView(field("Einblenden ab (Sekunden)",start));
+        body.addView(field("Ausblenden bei (Sekunden)",end));
+        final Runnable updateCaption=()->preview.update(
+            title.getText().toString(),size[0],original.color,position[0],position[1]);
+        title.addTextChangedListener(new TextWatcher(){
+            @Override public void beforeTextChanged(CharSequence s,int start,int count,int after){}
+            @Override public void onTextChanged(CharSequence s,int start,int before,int count){
+                updateCaption.run();
+            }
+            @Override public void afterTextChanged(Editable e){}
+        });
+        sizeSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onProgressChanged(SeekBar bar,int progress,boolean user){
+                size[0]=16+progress;
+                sizeLabel.setText("Schriftgröße: "+Math.round(size[0]));
+                updateCaption.run();
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar){}
+            @Override public void onStopTrackingTouch(SeekBar bar){}
+        });
+        updateCaption.run();
+        AlertDialog editor=new AlertDialog.Builder(this)
+            .setTitle(index<0?"Text einfügen – Clipvorschau":"Text bearbeiten – Clipvorschau")
+            .setView(scroll)
+            .setPositiveButton("Speichern",null)
+            .setNeutralButton(index<0?"Zurücksetzen":"Löschen",(d,w)->{
                 if(index>=0){project.captions.remove(index);saveProject();refresh();}
-            }).setNegativeButton("Zurück",null).show();
+            })
+            .setNegativeButton("Abbrechen",null)
+            .create();
+        editor.setOnShowListener(d->{
+            editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+                try{
+                    String titleText=title.getText().toString().trim();
+                    double from=parse(start),to=parse(end);
+                    if(titleText.isEmpty()||!Double.isFinite(from)||!Double.isFinite(to)||
+                        from<0||to<=from||to>project.duration()+.2)
+                        throw new IllegalArgumentException("Bitte gültigen Text und Zeitbereich eingeben.");
+                    original.text=titleText;original.start=from;original.end=to;
+                    original.x=position[0];original.y=position[1];original.sizeSp=size[0];
+                    if(index<0)project.captions.add(original);
+                    saveProject();refresh();editor.dismiss();
+                }catch(Exception ex){
+                    toast("Text/Zeit ungültig. Ende darf die Filmlänge nicht überschreiten.");
+                }
+            });
+        });
+        editor.setOnDismissListener(d->{
+            if(previewFrame!=null&&!previewFrame.isRecycled())previewFrame.recycle();
+        });
+        editor.show();
     }
     private void soundDialog(){
         LinearLayout l=vertical();l.setPadding(dp(22),dp(15),dp(22),dp(15));

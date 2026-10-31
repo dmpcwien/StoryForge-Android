@@ -1582,6 +1582,70 @@ public final class MainActivity extends Activity {
             }).setNeutralButton("Wiederherstellen",(d,w)->showProjectRecovery())
               .setNegativeButton("Schließen",null).show();
     }
+    /** Search without altering any local project or original media file. */
+    private void showProjectRecovery(){
+        List<ProjectRecovery.Candidate> found=ProjectRecovery.scan(getFilesDir());
+        if(found.isEmpty()){
+            new AlertDialog.Builder(this)
+                .setTitle("Keine lokale Sicherung gefunden")
+                .setMessage("In diesem App-Speicher wurde kein wiederherstellbarer Film gefunden. Wenn StoryForge deinstalliert oder dessen Daten gelöscht wurden, können die lokalen Projekte verloren sein. Prüfe eine zuvor erstellte StoryForge-ZIP-Sicherung im Ordner Downloads oder Dokumente.")
+                .setPositiveButton("ZIP laden",(d,w)->loadBackup())
+                .setNegativeButton("Schließen",null).show();
+            return;
+        }
+        java.text.SimpleDateFormat dateFormat=
+            new java.text.SimpleDateFormat("dd.MM.yyyy · HH:mm",Locale.GERMANY);
+        String[] choices=new String[found.size()];
+        for(int i=0;i<found.size();i++){
+            ProjectRecovery.Candidate candidate=found.get(i);
+            String source=candidate.source.getName().startsWith("project-undo-")?
+                "Rückgängig-Sicherung":candidate.source.getName().startsWith("project-redo-")?
+                "Wiederholen-Sicherung":candidate.source.getName().startsWith("project.json")?
+                "Automatischer Arbeitsstand":"Gespeichertes Projekt";
+            choices[i]=source+" · "+dateFormat.format(new java.util.Date(candidate.modified))+
+                "\n"+candidate.mediaCount+" Clips, davon "+
+                candidate.availableMediaCount+" Medien-Dateien vorhanden";
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Wiederherstellbare Filmstände")
+            .setMessage("Bitte einen Stand auswählen. Die Suche verändert keine gespeicherten Dateien.")
+            .setItems(choices,(d,which)->confirmProjectRecovery(found.get(which)))
+            .setNeutralButton("ZIP laden",(d,w)->loadBackup())
+            .setNegativeButton("Schließen",null).show();
+    }
+    private void confirmProjectRecovery(ProjectRecovery.Candidate candidate){
+        String message="Diesen Film mit "+candidate.mediaCount+" Clips als neues benanntes Projekt wiederherstellen? "+
+            "Der bisherige Arbeitsstand bleibt erhalten.";
+        if(candidate.availableMediaCount<candidate.mediaCount)
+            message+="\n\nACHTUNG: "+(candidate.mediaCount-candidate.availableMediaCount)+
+                " Medien-Datei(en) fehlen. Der Schnitt kann wiederhergestellt werden, aber die fehlenden Originaldateien werden dadurch nicht zurückgeholt.";
+        new AlertDialog.Builder(this)
+            .setTitle("Film wiederherstellen")
+            .setMessage(message)
+            .setPositiveButton("Wiederherstellen",(d,w)->{
+                try{
+                    String name="Geretteter Film "+
+                        new java.text.SimpleDateFormat("dd.MM.yyyy HH:mm",Locale.GERMANY)
+                            .format(new java.util.Date(candidate.modified));
+                    ProjectLibrary.Entry entry=projectLibrary.save(null,name,candidate.project);
+                    switchWorkingProject(candidate.project,entry.id,entry.name);
+                    toast("Film „"+entry.name+"“ wiederhergestellt.");
+                    showExternalBackupAdvice();
+                }catch(Exception ex){
+                    new AlertDialog.Builder(this).setTitle("Wiederherstellung fehlgeschlagen")
+                        .setMessage(String.valueOf(ex.getMessage()))
+                        .setPositiveButton("OK",null).show();
+                }
+            })
+            .setNegativeButton("Abbrechen",null).show();
+    }
+    private void showExternalBackupAdvice(){
+        new AlertDialog.Builder(this)
+            .setTitle("Projekt zusätzlich sichern")
+            .setMessage("Dein Film wurde lokal gespeichert. Bei einer Deinstallation oder beim Löschen der App-Daten kann dieser Speicher verloren gehen. Erstelle deshalb eine ZIP-Sicherung inklusive Fotos, Videos und Musik in Downloads oder Dokumente.")
+            .setPositiveButton("Jetzt ZIP sichern",(d,w)->saveBackup())
+            .setNegativeButton("Später",null).show();
+    }
     private void openNamedProject(ProjectLibrary.Entry entry){
         try{
             Project loaded=projectLibrary.load(entry.id);

@@ -171,6 +171,13 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams newParams=new LinearLayout.LayoutParams(0,-2,1);
         newParams.leftMargin=dp(5);projectActions.addView(newProject,newParams);
         screen.addView(projectActions,margin(-1,-2,8));
+        LinearLayout recoveryRow=horizontal();
+        recoveryRow.addView(pill("↶ Film wiederherstellen",SURFACE_2,this::showProjectRecovery),
+            new LinearLayout.LayoutParams(0,-2,1));
+        TextView externalBackup=pill("⤓ ZIP-Sicherung",SURFACE_2,this::saveBackup);
+        LinearLayout.LayoutParams exParams=new LinearLayout.LayoutParams(0,-2,1);
+        exParams.leftMargin=dp(6);recoveryRow.addView(externalBackup,exParams);
+        screen.addView(recoveryRow,margin(-1,-2,6));
         addSpacer(screen,10);
 
         previewContainer=new FrameLayout(this);previewContainer.setBackground(panel(Color.BLACK,18));
@@ -1498,6 +1505,12 @@ public final class MainActivity extends Activity {
     /** Explicit save converts the current working film into a named editable film. */
     private void promptSaveProject(){promptSaveProject(null);}
     private void promptSaveProject(Runnable afterSave){
+        if(project.clips.isEmpty()){
+            new AlertDialog.Builder(this).setTitle("Noch kein Film vorhanden")
+                .setMessage("Bitte zuerst mindestens ein Bild oder Video hinzufügen. Leere Projekte werden nicht als gespeicherte Filme angezeigt.")
+                .setPositiveButton("OK",null).show();
+            return;
+        }
         final EditText input=new EditText(this);
         input.setSingleLine(true);
         input.setHint("z. B. Urlaub 2026 oder Santiagos Geburtstag");
@@ -1519,14 +1532,16 @@ public final class MainActivity extends Activity {
     private void saveNamedProject(String name,boolean copy,Runnable afterSave){
         try{
             String key=copy||activeProjectId.isEmpty()?null:activeProjectId;
+            boolean firstSave=key==null;
             ProjectLibrary.Entry entry=projectLibrary.save(key,name,project);
             activeProjectId=entry.id;
             activeProjectName=entry.name;
             getPreferences(MODE_PRIVATE).edit().putString("active_project_id",activeProjectId).apply();
             saveProject();
             refresh();
-            toast("Projekt „"+entry.name+"“ gespeichert. Änderungen werden automatisch gesichert.");
+            toast("Projekt „"+entry.name+"“ lokal gespeichert.");
             if(afterSave!=null)afterSave.run();
+            else if(firstSave)showExternalBackupAdvice();
         }catch(Exception ex){
             new AlertDialog.Builder(this).setTitle("Projekt nicht gespeichert")
                 .setMessage(String.valueOf(ex.getMessage())).setPositiveButton("OK",null).show();
@@ -1536,8 +1551,9 @@ public final class MainActivity extends Activity {
         List<ProjectLibrary.Entry> entries=projectLibrary.list();
         if(entries.isEmpty()){
             new AlertDialog.Builder(this).setTitle("Gespeicherte Projekte")
-                .setMessage("Noch keine benannten Projekte vorhanden. Speichere deinen aktuellen Film zuerst.")
-                .setPositiveButton("Projekt speichern",(d,w)->promptSaveProject())
+                .setMessage("Hier ist noch kein gültiger benannter Projektstand verfügbar. Prüfe zuerst die automatische Wiederherstellung. Wenn du die App neu installiert hast, kannst du auch eine zuvor exportierte ZIP-Sicherung öffnen.")
+                .setPositiveButton("Wiederherstellen",(d,w)->showProjectRecovery())
+                .setNeutralButton("ZIP auswählen",(d,w)->loadBackup())
                 .setNegativeButton("Schließen",null).show();
             return;
         }
@@ -1553,7 +1569,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Gespeicherte Projekte öffnen")
             .setItems(labels,(d,which)->{
                 ProjectLibrary.Entry chosen=entries.get(which);
-                if(chosen.id.equals(activeProjectId)){
+                if(chosen.id.equals(activeProjectId)&&!project.clips.isEmpty()){
                     toast("Dieses Projekt ist bereits geöffnet.");return;
                 }
                 if(activeProjectId.isEmpty()&&!project.clips.isEmpty()){
@@ -1563,7 +1579,8 @@ public final class MainActivity extends Activity {
                         .setNeutralButton("Ohne Speichern öffnen",(confirm,w)->openNamedProject(chosen))
                         .setNegativeButton("Abbrechen",null).show();
                 }else openNamedProject(chosen);
-            }).setNegativeButton("Schließen",null).show();
+            }).setNeutralButton("Wiederherstellen",(d,w)->showProjectRecovery())
+              .setNegativeButton("Schließen",null).show();
     }
     private void openNamedProject(ProjectLibrary.Entry entry){
         try{
@@ -1884,16 +1901,23 @@ public final class MainActivity extends Activity {
         }catch(Exception ex){android.util.Log.e("StoryForge","Projekt speichern",ex);}
     }
     private void loadProject(){
-        try{File f=projectFile();if(!f.exists())return;
-            byte[] bytes=new byte[(int)f.length()];try(FileInputStream input=new FileInputStream(f)){
-                int offset=0,n;while(offset<bytes.length&&(n=input.read(bytes,offset,bytes.length-offset))!=-1)offset+=n;
+        Project loaded=null;
+        try{
+            File f=projectFile();
+            if(f.isFile()){
+                byte[] bytes=java.nio.file.Files.readAllBytes(f.toPath());
+                loaded=Project.fromJson(new JSONObject(new String(bytes,StandardCharsets.UTF_8)));
             }
-            Project loaded=Project.fromJson(new JSONObject(new String(bytes,StandardCharsets.UTF_8)));
-            // Never silently drop inaccessible media: keep editable references
-            // and warn when reopening a named project instead.
-            // Keep missing music references intact for later recovery; never silently discard them.
-            project=loaded;
-        }catch(Exception ex){android.util.Log.e("StoryForge","Projekt laden",ex);}
+        }catch(Exception ex){android.util.Log.e("StoryForge","Arbeitsprojekt laden",ex);}
+        // If the current working copy is missing/corrupt/empty, prefer the
+        // last valid named snapshot rather than showing an empty editor.
+        if(!activeProjectId.isEmpty()&&(loaded==null||loaded.clips.isEmpty())){
+            try{
+                Project named=projectLibrary.load(activeProjectId);
+                if(!named.clips.isEmpty())loaded=named;
+            }catch(Exception ex){android.util.Log.w("StoryForge","Benanntes Projekt nicht lesbar",ex);}
+        }
+        if(loaded!=null)project=loaded;
     }
     @Override protected void onPause(){saveProject();super.onPause();stopPreview();}
     @Override protected void onDestroy(){stopPreview();fileQueue.shutdown();super.onDestroy();}

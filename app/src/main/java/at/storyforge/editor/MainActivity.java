@@ -1608,7 +1608,7 @@ public final class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
             .setTitle("Wiederherstellbare Filmstände")
-            .setMessage("Bitte einen Stand auswählen. Die Suche verändert keine gespeicherten Dateien.")
+            // setMessage() suppresses setItems() on Android AlertDialog; keep choices visible.
             .setItems(choices,(d,which)->confirmProjectRecovery(found.get(which)))
             .setNeutralButton("ZIP laden",(d,w)->loadBackup())
             .setNegativeButton("Schließen",null).show();

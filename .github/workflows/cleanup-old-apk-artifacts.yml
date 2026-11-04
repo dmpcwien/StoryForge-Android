@@ -1,0 +1,64 @@
+name: Cleanup old APK artifacts (keep latest 2)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/cleanup-old-apk-artifacts.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: cleanup-old-apks
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Remove old APK artifacts only
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const exclude = /(backup|database|storage|restore|recovery|keystore|secret|signing|snapshot|diagnos|screenshot|preview|source|test[-_]?report)/i;
+            const apkName = /(apk|^schachnova-(?:debug|release)-|^touchpilot-.*-signed(?:$|-))/i;
+            const all = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner, repo, per_page: 100
+            });
+            const eligible = all.filter(a =>
+              !a.expired && apkName.test(a.name) && !exclude.test(a.name)
+            ).sort((a, b) =>
+              new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              || b.id - a.id
+            );
+            const keep = eligible.slice(0, 2);
+            const toDelete = eligible.slice(2);
+            core.info('Keeping newest APK artifacts: ' + keep.map(a => a.name + ' (' + a.id + ')').join(', '));
+            core.info('Deleting ' + toDelete.length + ' older APK artifacts in ' + owner + '/' + repo);
+            let deleted = 0, bytes = 0, failed = 0;
+            for (const artifact of toDelete) {
+              try {
+                await github.rest.actions.deleteArtifact({
+                  owner, repo, artifact_id: artifact.id
+                });
+                deleted += 1;
+                bytes += artifact.size_in_bytes || 0;
+              } catch (error) {
+                failed += 1;
+                core.warning('Could not delete artifact ' + artifact.id + ': ' + error.message);
+              }
+            }
+            await core.summary
+              .addHeading('Old APK artifact cleanup')
+              .addRaw('Repository: ' + owner + '/' + repo + '\n\n')
+              .addRaw('Protected latest APK artifacts: ' + keep.length + '\n\n')
+              .addRaw('Deleted old APK artifacts: ' + deleted + '\n\n')
+              .addRaw('Approximate storage freed: ' + (bytes / 1048576).toFixed(1) + ' MiB\n\n')
+              .addRaw('Failed deletions: ' + failed + '\n\n')
+              .addRaw('GitHub Releases, source code, database and encrypted backups are untouched.')
+              .write();
+            if (failed) core.setFailed(failed + ' artifact deletions failed');

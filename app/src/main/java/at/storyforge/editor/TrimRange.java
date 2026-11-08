@@ -5,7 +5,8 @@ final class TrimRange {
     static final double MIN_SECONDS=.15;
 
     static double clamp(double number,double minimum,double maximum){
-        if(!Double.isFinite(number))return minimum;
+        if(Double.isNaN(number)||number==Double.NEGATIVE_INFINITY)return minimum;
+        if(number==Double.POSITIVE_INFINITY)return maximum;
         return Math.max(minimum,Math.min(maximum,number));
     }
     static double[] normalize(double duration,double start,double end){

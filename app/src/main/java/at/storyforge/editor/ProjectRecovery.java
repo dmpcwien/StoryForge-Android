@@ -31,6 +31,8 @@ final class ProjectRecovery {
         List<File> sources=new ArrayList<>();
         sources.add(new File(filesDir,"project.json"));
         sources.add(new File(filesDir,"project.json.next"));
+        sources.add(new File(filesDir,CrashAutosave.FILE));
+        sources.add(new File(filesDir,CrashAutosave.PREVIOUS));
         for(String kind:new String[]{"undo","redo"})
             for(int i=1;i<=8;i++)sources.add(new File(filesDir,"project-"+kind+"-"+i+".json"));
         File saved=new File(filesDir,"saved_projects");

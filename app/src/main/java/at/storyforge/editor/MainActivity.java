@@ -614,7 +614,6 @@ public final class MainActivity extends Activity {
         }else{
             previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
             previewVideo.setRotation(c.rotationDegrees);
-            previewVideo.setVideoPath(c.path);
             previewVideo.setOnPreparedListener(mp->{
                 try{mp.setVolume((float)project.originalVolume,(float)project.originalVolume);
                     long offset=playing?(previewPaused?pausedClipElapsedMs:
@@ -623,6 +622,10 @@ public final class MainActivity extends Activity {
                     previewVideo.seekTo((int)Math.min(Integer.MAX_VALUE,seek));
                     if(autoPlay&&playing&&!previewPaused)previewVideo.start();}catch(Exception ignored){}
             });
+            previewVideo.setOnCompletionListener(mp->{
+                if(playing&&previewOnlySelected)stopPreviewAndShowSelected();
+            });
+            previewVideo.setVideoPath(c.path);
         }
     }
     private String transitionLabel(String s){

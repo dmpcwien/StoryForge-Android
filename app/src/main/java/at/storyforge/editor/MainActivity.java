@@ -1272,18 +1272,37 @@ public final class MainActivity extends Activity {
         ScrollView scroll=new ScrollView(this);
         LinearLayout body=vertical();body.setPadding(dp(16),dp(6),dp(16),dp(10));
         scroll.addView(body);
-        body.addView(text("Ganzes Video als Bildstreifen · Griffe links/rechts ziehen",
-            12,CYAN,false),margin(-1,-2,8));
+        body.addView(text("Vorschau: der gewählte Ausschnitt wird direkt als Bild angezeigt.",
+            13,CYAN,true),margin(-1,-2,8));
+        FrameLayout previewSurface=new FrameLayout(this);
+        previewSurface.setBackground(panel(Color.BLACK,10));
         VideoView viewer=new VideoView(this);
         viewer.setBackgroundColor(Color.BLACK);
         viewer.setRotation(clip.rotationDegrees);
-        body.addView(viewer,lp(-1,200));
-        TextView controls=button("▶ Markierten Ausschnitt abspielen",0xFF3C325D,()->{});
-        body.addView(controls,margin(-1,43,8));
+        previewSurface.addView(viewer,new FrameLayout.LayoutParams(-1,-1));
+        ImageView still=new ImageView(this);
+        still.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        still.setBackgroundColor(Color.BLACK);
+        try{
+            Bitmap first=thumbnail(clip);
+            if(first!=null)still.setImageBitmap(first);
+        }catch(Exception ignored){}
+        previewSurface.addView(still,new FrameLayout.LayoutParams(-1,-1));
+        body.addView(previewSurface,lp(-1,190));
+        TextView controls=button("▶ Gewählten Ausschnitt abspielen",0xFF6744B7,()->{});
+        body.addView(controls,margin(-1,48,10));
+        body.addView(text("GANZES VIDEO · links/rechts wischen, violette Griffe ziehen",
+            12,WHITE,true),margin(-1,-2,7));
         TrimFilmstripView strip=new TrimFilmstripView(this,duration,choice[0],choice[1]);
-        body.addView(strip,margin(-1,100,8));
-        body.addView(text("Der dunkle Bereich wird abgeschnitten. Violette Griffe begrenzen den sichtbaren Clip.",
-            11,MUTED,false),margin(-1,-2,8));
+        strip.setPadding(dp(15),dp(4),dp(15),dp(4));
+        HorizontalScrollView filmstripScroll=new HorizontalScrollView(this);
+        filmstripScroll.setHorizontalScrollBarEnabled(true);
+        int stripWidth=Math.max(dp(540),Math.min(dp(1600),
+            (int)(duration*dp(29))));
+        filmstripScroll.addView(strip,new android.widget.FrameLayout.LayoutParams(stripWidth,dp(126)));
+        body.addView(filmstripScroll,margin(-1,126,9));
+        body.addView(text("Dunkel = wird entfernt. Die breiten violetten Griffe bestimmen Start und Ende.",
+            12,WHITE,false),margin(-1,-2,10));
         TextView selectedDuration=text("",13,CYAN,true);
         body.addView(selectedDuration,margin(-1,-2,8));
         EditText from=number(choice[0]),to=number(choice[1]);
@@ -1310,7 +1329,7 @@ public final class MainActivity extends Activity {
         final Runnable pauseChoice=()->{
             active[0]=false;
             viewer.pause();
-            controls.setText("▶ Markierten Ausschnitt abspielen");
+            controls.setText("▶ Gewählten Ausschnitt abspielen");
             if(monitor[0]!=null)main.removeCallbacks(monitor[0]);
         };
         monitor[0]=new Runnable(){
@@ -1318,6 +1337,9 @@ public final class MainActivity extends Activity {
                 if(closed[0]||!active[0])return;
                 if(viewer.getCurrentPosition()>=choice[1]*1000-30){
                     pauseChoice.run();
+                    still.setVisibility(View.VISIBLE);
+                    Bitmap frozen=strip.frameAt(choice[1]);
+                    if(frozen!=null)still.setImageBitmap(frozen);
                     viewer.seekTo((int)Math.round(choice[1]*1000));
                     return;
                 }
@@ -1331,6 +1353,7 @@ public final class MainActivity extends Activity {
             if(current<choice[0]*1000||current>=choice[1]*1000-50)
                 viewer.seekTo((int)Math.round(choice[0]*1000));
             viewer.start();active[0]=true;
+            still.setVisibility(View.GONE);
             controls.setText("❚❚ Pause");
             main.post(monitor[0]);
         };
@@ -1339,6 +1362,9 @@ public final class MainActivity extends Activity {
             choice[0]=start;choice[1]=end;
             pauseChoice.run();
             showValues.run();
+            still.setVisibility(View.VISIBLE);
+            Bitmap current=strip.frameAt(seek);
+            if(current!=null)still.setImageBitmap(current);
             if(prepared[0])viewer.seekTo((int)Math.round(seek*1000));
         });
         final TextWatcher changed=new TextWatcher(){
@@ -1354,6 +1380,9 @@ public final class MainActivity extends Activity {
                     strip.setRange(choice[0],choice[1]);
                     updateLength.run();
                     pauseChoice.run();
+                    still.setVisibility(View.VISIBLE);
+                    Bitmap current=strip.frameAt(choice[0]);
+                    if(current!=null)still.setImageBitmap(current);
                     if(prepared[0])viewer.seekTo((int)Math.round(choice[0]*1000));
                 }catch(Exception ignored){/* partial number while typing */}
             }
@@ -1370,7 +1399,6 @@ public final class MainActivity extends Activity {
             pauseChoice.run();
             if(!closed[0])viewer.seekTo((int)Math.round(choice[0]*1000));
         });
-        viewer.setVideoPath(clip.path);
         AlertDialog dialog=new AlertDialog.Builder(this)
             .setTitle("Video schneiden · Bildvorschau")
             .setView(scroll)
@@ -1384,12 +1412,23 @@ public final class MainActivity extends Activity {
             closed[0]=true;
             pauseChoice.run();
             try{viewer.stopPlayback();}catch(Exception ignored){}
+            still.setImageDrawable(null);
             strip.release();
         });
         dialog.show();
+        Window trimWindow=dialog.getWindow();
+        if(trimWindow!=null)trimWindow.setLayout(-1,-2);
+        // Attach the video only after the dialog owns its window/surface.
+        viewer.setVideoPath(clip.path);
+        filmstripScroll.post(()->{
+            if(!closed[0]){
+                int target=Math.round(stripWidth*(float)(choice[0]/duration));
+                filmstripScroll.scrollTo(Math.max(0,target-dp(35)),0);
+            }
+        });
         // Extract equally spaced frames from the ENTIRE video outside the UI thread.
         fileQueue.execute(()->{
-            final int count=9;
+            final int count=Math.max(10,Math.min(22,(int)(duration/3)+10));
             Bitmap[] thumbs=new Bitmap[count];
             MediaMetadataRetriever retriever=new MediaMetadataRetriever();
             try{
@@ -1399,14 +1438,17 @@ public final class MainActivity extends Activity {
                     long at=(long)(Math.max(0,duration*i/(count-1)-.005)*1000000L);
                     try{
                         thumbs[i]=retriever.getScaledFrameAtTime(at,
-                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,160,96);
+                            MediaMetadataRetriever.OPTION_CLOSEST,220,135);
                     }catch(Exception ignored){}
                 }
             }catch(Exception ignored){}
             finally{try{retriever.release();}catch(Exception ignored){}}
             runOnUiThread(()->{
-                if(!closed[0])strip.setThumbnails(thumbs);
-                else for(Bitmap bm:thumbs)if(bm!=null&&!bm.isRecycled())bm.recycle();
+                if(!closed[0]){
+                    strip.setThumbnails(thumbs);
+                    Bitmap first=strip.frameAt(choice[0]);
+                    if(first!=null&&!active[0])still.setImageBitmap(first);
+                }else for(Bitmap bm:thumbs)if(bm!=null&&!bm.isRecycled())bm.recycle();
             });
         });
     }

@@ -41,6 +41,19 @@ final class TrimFilmstripView extends View {
             if(bitmap!=null&&!bitmap.isRecycled())bitmap.recycle();
         thumbnails=new Bitmap[0];
     }
+    /** Nearest decoded frame when a handle moves, so preview stays visible while paused. */
+    Bitmap frameAt(double seconds){
+        if(thumbnails.length==0)return null;
+        int at=(int)Math.round(TrimRange.clamp(seconds,0,duration)/
+            Math.max(.001,duration)*(thumbnails.length-1));
+        for(int i=0;i<thumbnails.length;i++){
+            int index=Math.max(0,Math.min(thumbnails.length-1,at+i));
+            if(thumbnails[index]!=null&&!thumbnails[index].isRecycled())return thumbnails[index];
+            index=Math.max(0,Math.min(thumbnails.length-1,at-i));
+            if(thumbnails[index]!=null&&!thumbnails[index].isRecycled())return thumbnails[index];
+        }
+        return null;
+    }
     double start(){return start;}
     double end(){return end;}
     void setRange(double from,double to){
@@ -81,8 +94,8 @@ final class TrimFilmstripView extends View {
         overlay.setColor(BLUE);
         canvas.drawRect(x1,top,x2,bottom,overlay);
         overlay.setStyle(Paint.Style.FILL);
-        canvas.drawRoundRect(x1-dp(6),top,x1+dp(6),bottom,dp(4),dp(4),overlay);
-        canvas.drawRoundRect(x2-dp(6),top,x2+dp(6),bottom,dp(4),dp(4),overlay);
+        canvas.drawRoundRect(x1-dp(9),top,x1+dp(9),bottom,dp(5),dp(5),overlay);
+        canvas.drawRoundRect(x2-dp(9),top,x2+dp(9),bottom,dp(5),dp(5),overlay);
         overlay.setColor(Color.WHITE);overlay.setStrokeWidth(dp(2));
         canvas.drawLine(x1,top+dp(12),x1,bottom-dp(12),overlay);
         canvas.drawLine(x2,top+dp(12),x2,bottom-dp(12),overlay);
@@ -95,6 +108,12 @@ final class TrimFilmstripView extends View {
                 downX=x;
                 float distA=Math.abs(x-xFor(start));
                 float distB=Math.abs(x-xFor(end));
+                // A swipe through the rest of the strip scrolls the frames.
+                // Only grabbing one of the visible handles changes trim bounds.
+                if(Math.min(distA,distB)>dp(28)){
+                    selectedHandle=-1;
+                    return false;
+                }
                 selectedHandle=distA<=distB?0:1;
                 getParent().requestDisallowInterceptTouchEvent(true);
                 return true;

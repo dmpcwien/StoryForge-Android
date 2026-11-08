@@ -1224,7 +1224,154 @@ public final class MainActivity extends Activity {
                 if(!original.isRecycled())original.recycle();
             }).show();
     }
+    /** A complete filmstrip of the source file plus immediate playback of only the selected range. */
+    private void visualTrimDialog(Project.Clip clip){
+        stopPreview();
+        final double duration=Math.max(TrimRange.MIN_SECONDS,clip.sourceDuration);
+        final double[] choice=TrimRange.normalize(duration,clip.start,clip.end);
+        ScrollView scroll=new ScrollView(this);
+        LinearLayout body=vertical();body.setPadding(dp(16),dp(6),dp(16),dp(10));
+        scroll.addView(body);
+        body.addView(text("Ganzes Video als Bildstreifen · Griffe links/rechts ziehen",
+            12,CYAN,false),margin(-1,-2,8));
+        VideoView viewer=new VideoView(this);
+        viewer.setBackgroundColor(Color.BLACK);
+        viewer.setRotation(clip.rotationDegrees);
+        body.addView(viewer,lp(-1,200));
+        TextView controls=button("▶ Markierten Ausschnitt abspielen",0xFF3C325D,()->{});
+        body.addView(controls,margin(-1,43,8));
+        TrimFilmstripView strip=new TrimFilmstripView(this,duration,choice[0],choice[1]);
+        body.addView(strip,margin(-1,100,8));
+        body.addView(text("Der dunkle Bereich wird abgeschnitten. Violette Griffe begrenzen den sichtbaren Clip.",
+            11,MUTED,false),margin(-1,-2,8));
+        TextView selectedDuration=text("",13,CYAN,true);
+        body.addView(selectedDuration,margin(-1,-2,8));
+        EditText from=number(choice[0]),to=number(choice[1]);
+        LinearLayout fields=horizontal();
+        fields.addView(field("Start (Sek.)",from),new LinearLayout.LayoutParams(0,-2,1));
+        LinearLayout.LayoutParams b=new LinearLayout.LayoutParams(0,-2,1);
+        b.leftMargin=dp(12);fields.addView(field("Ende (Sek.)",to),b);
+        body.addView(fields);
+        final boolean[] prepared={false},active={false},closed={false},editing={false};
+        final Runnable[] monitor={null};
+        final Runnable updateLength=()->{
+            selectedDuration.setText("Ausgewählter Clip: "+
+                String.format(Locale.GERMANY,"%.2f – %.2f Sek.   (%.2f Sek.)",
+                    choice[0],choice[1],choice[1]-choice[0]));
+        };
+        final Runnable showValues=()->{
+            editing[0]=true;
+            from.setText(String.format(Locale.US,"%.2f",choice[0]));
+            to.setText(String.format(Locale.US,"%.2f",choice[1]));
+            editing[0]=false;
+            strip.setRange(choice[0],choice[1]);
+            updateLength.run();
+        };
+        final Runnable pauseChoice=()->{
+            active[0]=false;
+            viewer.pause();
+            controls.setText("▶ Markierten Ausschnitt abspielen");
+            if(monitor[0]!=null)main.removeCallbacks(monitor[0]);
+        };
+        monitor[0]=new Runnable(){
+            @Override public void run(){
+                if(closed[0]||!active[0])return;
+                if(viewer.getCurrentPosition()>=choice[1]*1000-30){
+                    pauseChoice.run();
+                    viewer.seekTo((int)Math.round(choice[1]*1000));
+                    return;
+                }
+                main.postDelayed(this,65);
+            }
+        };
+        final Runnable previewStart=()->{
+            if(!prepared[0]){toast("Videovorschau wird geladen.");return;}
+            if(active[0]){pauseChoice.run();return;}
+            int current=viewer.getCurrentPosition();
+            if(current<choice[0]*1000||current>=choice[1]*1000-50)
+                viewer.seekTo((int)Math.round(choice[0]*1000));
+            viewer.start();active[0]=true;
+            controls.setText("❚❚ Pause");
+            main.post(monitor[0]);
+        };
+        controls.setOnClickListener(v->previewStart.run());
+        strip.setOnTrimChanged((start,end,seek)->{
+            choice[0]=start;choice[1]=end;
+            pauseChoice.run();
+            showValues.run();
+            if(prepared[0])viewer.seekTo((int)Math.round(seek*1000));
+        });
+        final TextWatcher changed=new TextWatcher(){
+            @Override public void beforeTextChanged(CharSequence text,int start,int count,int after){}
+            @Override public void onTextChanged(CharSequence text,int start,int before,int count){}
+            @Override public void afterTextChanged(Editable text){
+                if(editing[0])return;
+                try{
+                    double start=Double.parseDouble(from.getText().toString().replace(',','.'));
+                    double end=Double.parseDouble(to.getText().toString().replace(',','.'));
+                    double[] next=TrimRange.normalize(duration,start,end);
+                    choice[0]=next[0];choice[1]=next[1];
+                    strip.setRange(choice[0],choice[1]);
+                    updateLength.run();
+                    pauseChoice.run();
+                    if(prepared[0])viewer.seekTo((int)Math.round(choice[0]*1000));
+                }catch(Exception ignored){/* partial number while typing */}
+            }
+        };
+        from.addTextChangedListener(changed);to.addTextChangedListener(changed);
+        updateLength.run();
+        viewer.setOnPreparedListener(mp->{
+            prepared[0]=true;
+            try{mp.setVolume((float)project.originalVolume,(float)project.originalVolume);}
+            catch(Exception ignored){}
+            if(!closed[0])viewer.seekTo((int)Math.round(choice[0]*1000));
+        });
+        viewer.setOnCompletionListener(mp->{
+            pauseChoice.run();
+            if(!closed[0])viewer.seekTo((int)Math.round(choice[0]*1000));
+        });
+        viewer.setVideoPath(clip.path);
+        AlertDialog dialog=new AlertDialog.Builder(this)
+            .setTitle("Video schneiden · Bildvorschau")
+            .setView(scroll)
+            .setPositiveButton("Schnitt übernehmen",(d,w)->{
+                clip.start=choice[0];clip.end=choice[1];
+                stopPreview();thumbCache.evictAll();saveProject();refresh();
+            })
+            .setNegativeButton("Abbrechen",null)
+            .create();
+        dialog.setOnDismissListener(d->{
+            closed[0]=true;
+            pauseChoice.run();
+            try{viewer.stopPlayback();}catch(Exception ignored){}
+            strip.release();
+        });
+        dialog.show();
+        // Extract equally spaced frames from the ENTIRE video outside the UI thread.
+        fileQueue.execute(()->{
+            final int count=9;
+            Bitmap[] thumbs=new Bitmap[count];
+            MediaMetadataRetriever retriever=new MediaMetadataRetriever();
+            try{
+                retriever.setDataSource(clip.path);
+                for(int i=0;i<count;i++){
+                    if(closed[0])break;
+                    long at=(long)(Math.max(0,duration*i/(count-1)-.005)*1000000L);
+                    try{
+                        thumbs[i]=retriever.getScaledFrameAtTime(at,
+                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,160,96);
+                    }catch(Exception ignored){}
+                }
+            }catch(Exception ignored){}
+            finally{try{retriever.release();}catch(Exception ignored){}}
+            runOnUiThread(()->{
+                if(!closed[0])strip.setThumbnails(thumbs);
+                else for(Bitmap bm:thumbs)if(bm!=null&&!bm.isRecycled())bm.recycle();
+            });
+        });
+    }
     private void clipTimingDialog(Project.Clip c){
+        if(!c.image){visualTrimDialog(c);return;}
         LinearLayout wrap=vertical();wrap.setPadding(dp(20),dp(8),dp(20),dp(5));
         EditText start=number(c.start),end=number(c.end);
         ImageView frame=new ImageView(this);frame.setScaleType(ImageView.ScaleType.FIT_CENTER);

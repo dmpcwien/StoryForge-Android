@@ -1771,7 +1771,8 @@ public final class MainActivity extends Activity {
         String[] choices=new String[found.size()];
         for(int i=0;i<found.size();i++){
             ProjectRecovery.Candidate candidate=found.get(i);
-            String source=candidate.source.getName().startsWith("project-undo-")?
+            String source=candidate.source.getName().startsWith("project-autosave")?
+                "Notfallsicherung":candidate.source.getName().startsWith("project-undo-")?
                 "Rückgängig-Sicherung":candidate.source.getName().startsWith("project-redo-")?
                 "Wiederholen-Sicherung":candidate.source.getName().startsWith("project.json")?
                 "Automatischer Arbeitsstand":"Gespeichertes Projekt";

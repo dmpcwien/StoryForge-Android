@@ -54,19 +54,24 @@ final class CrashAutosave implements Thread.UncaughtExceptionHandler {
         if(closed||!enqueued.compareAndSet(false,true))return;
         try{
             writer.execute(()->{
+                byte[] lastAttempt=null;
+                boolean failed=false;
                 try{
                     while(true){
                         byte[] newest=pending.get();
                         if(newest==null)break;
+                        lastAttempt=newest;
                         persist(newest);
                         if(pending.get()==newest)break;
                     }
                 }catch(Exception e){
+                    failed=true;
                     android.util.Log.e("StoryForge","Notfallsicherung",e);
                 }finally{
                     enqueued.set(false);
-                    if(!closed&&pending.get()!=null&&
-                        !Arrays.equals(pending.get(),written))schedule();
+                    // Do not spin forever on a full disk or file permission error.
+                    // A newer user edit will trigger the next safe write attempt.
+                    if(!closed&&!failed&&pending.get()!=lastAttempt)schedule();
                 }
             });
         }catch(java.util.concurrent.RejectedExecutionException ignored){

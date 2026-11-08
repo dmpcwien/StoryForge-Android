@@ -2040,6 +2040,312 @@ public final class MainActivity extends Activity {
         pausedClipElapsedMs=0;
         showClip(previewIndex,true);
     }
+    /**
+     * Reference-inspired one-screen editor. The advanced editor stays untouched:
+     * preview, filmstrip and relevant tools share one screen.
+     */
+    private void openSimpleEditor(){
+        if(simpleEditorDialog!=null)return;
+        if(fullscreenDialog!=null){toast("Bitte zuerst die Vollbildansicht schließen.");return;}
+        if(project.clips.isEmpty()){toast("Bitte zuerst Fotos oder Videos hinzufügen.");return;}
+        stopPreview();
+        final int slot=screen.indexOfChild(previewContainer);
+        if(slot<0)return;
+        final int oldHeight=previewContainer.getLayoutParams().height;
+        screen.removeView(previewContainer);
+        Dialog dialog=new Dialog(this);
+        simpleEditorDialog=dialog;
+        LinearLayout root=vertical();
+        root.setBackgroundColor(BG);
+        root.setPadding(dp(10),dp(9),dp(10),dp(15));
+
+        LinearLayout header=horizontal();
+        header.addView(button("‹ Zurück",SURFACE_2,dialog::dismiss),lp(92,42));
+        TextView heading=text("SCHNITTSTUDIO",14,WHITE,true);
+        heading.setGravity(Gravity.CENTER);
+        header.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
+        header.addView(button("💾",SURFACE_2,()->{saveProject();toast("Bearbeitung gespeichert.");}),
+            lp(49,42));
+        root.addView(header,margin(-1,-2,8));
+        root.addView(previewContainer,new LinearLayout.LayoutParams(-1,0,1f));
+
+        LinearLayout playback=horizontal();
+        simpleEditorPlayButton=button("▶ Clip",0xFF49356E,()->{
+            if(playing)togglePreview();else startPreview(true);
+        });
+        playback.addView(simpleEditorPlayButton,new LinearLayout.LayoutParams(0,dp(43),1));
+        TextView all=button("▶ Film",SURFACE_2,this::playWholeFilm);
+        LinearLayout.LayoutParams allParams=new LinearLayout.LayoutParams(0,dp(43),1);
+        allParams.leftMargin=dp(7);playback.addView(all,allParams);
+        root.addView(playback,margin(-1,-2,12));
+
+        simpleEditorClipLabel=text("",12,CYAN,true);
+        simpleEditorClipLabel.setGravity(Gravity.CENTER);
+        root.addView(simpleEditorClipLabel,margin(-1,-2,7));
+        FrameLayout stripHolder=new FrameLayout(this);
+        stripHolder.setBackground(panel(SURFACE,9));
+        simpleEditorScroll=new HorizontalScrollView(this);
+        simpleEditorScroll.setHorizontalScrollBarEnabled(false);
+        simpleEditorScroll.setFillViewport(false);
+        simpleEditorStrip=horizontal();
+        simpleEditorScroll.addView(simpleEditorStrip);
+        stripHolder.addView(simpleEditorScroll,new FrameLayout.LayoutParams(-1,-1));
+        View playhead=new View(this);
+        playhead.setBackground(panel(WHITE,2));
+        FrameLayout.LayoutParams marker=new FrameLayout.LayoutParams(dp(3),dp(82),Gravity.CENTER);
+        stripHolder.addView(playhead,marker);
+        root.addView(stripHolder,margin(-1,92,6));
+        root.addView(text("Zeitleiste wischen · Clip antippen · weiße Linie = aktuelle Stelle",
+            11,MUTED,false),margin(-1,-2,11));
+
+        HorizontalScrollView toolsScroll=new HorizontalScrollView(this);
+        toolsScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout tools=horizontal();
+        tools.setPadding(dp(2),0,dp(6),0);
+        addSimpleAction(tools,"✂ Schneiden",()->{
+            if(project.clips.isEmpty())return;
+            stopPreview();clipTimingDialog(project.clips.get(selected));
+        });
+        addSimpleAction(tools,"╱ Teilen",this::splitAtSimplePlayhead);
+        addSimpleAction(tools,"◇ Übergang",this::simpleTransitionDialog);
+        addSimpleAction(tools,"T Text",this::addCaption);
+        addSimpleAction(tools,"◉ Tempo",this::editEffects);
+        addSimpleAction(tools,"⌫ Löschen",this::deleteSimpleClip);
+        toolsScroll.addView(tools);
+        root.addView(toolsScroll,margin(-1,48,8));
+
+        dialog.setContentView(root);
+        dialog.setOnDismissListener(d->{
+            simpleStoryboardGeneration++;
+            stopPreview();
+            ViewGroup parent=(ViewGroup)previewContainer.getParent();
+            if(parent!=null)parent.removeView(previewContainer);
+            previewContainer.setLayoutParams(new LinearLayout.LayoutParams(-1,oldHeight));
+            screen.addView(previewContainer,Math.min(slot,screen.getChildCount()));
+            simpleEditorDialog=null;simpleEditorScroll=null;simpleEditorStrip=null;
+            simpleEditorClipLabel=null;simpleEditorPlayButton=null;simpleGeometry=null;
+            simpleEditorCards.clear();
+            simpleScrubSource=-1;
+            showSelected();
+            refreshPreviewButtons();
+        });
+        dialog.show();
+        Window window=dialog.getWindow();
+        if(window!=null){
+            window.setBackgroundDrawableResource(android.R.color.black);
+            window.setLayout(-1,-1);
+        }
+        simpleEditorScroll.setOnScrollChangeListener((v,x,y,oldX,oldY)->onSimpleTimelineScroll(x));
+        simpleEditorScroll.addOnLayoutChangeListener((v,left,top,right,bottom,ol,ot,or,ob)->{
+            if(right-left!=or-ol)rebuildSimpleEditorTimeline();
+        });
+        simpleEditorScroll.post(this::rebuildSimpleEditorTimeline);
+        showSelected();
+    }
+    private void addSimpleAction(LinearLayout tools,String label,Runnable action){
+        TextView button=pill(label,SURFACE_2,action);
+        LinearLayout.LayoutParams p=lp(112,44);
+        p.rightMargin=dp(6);tools.addView(button,p);
+    }
+    private void rebuildSimpleEditorTimeline(){
+        if(simpleEditorDialog==null||simpleEditorStrip==null||
+            simpleEditorScroll==null||simpleEditorScroll.getWidth()<1)return;
+        simpleStoryboardGeneration++;
+        final int generation=simpleStoryboardGeneration;
+        simpleIgnoreScroll=true;
+        simpleEditorStrip.removeAllViews();simpleEditorCards.clear();
+        if(project.clips.isEmpty()){
+            simpleGeometry=null;
+            simpleIgnoreScroll=false;
+            simpleEditorClipLabel.setText("Noch keine Clips");
+            return;
+        }
+        simpleGeometry=new SimpleTimelineGeometry(project.clips,
+            dp(70),dp(12),dp(172),dp(30));
+        int sidePadding=simpleEditorScroll.getWidth()/2;
+        View startPad=new View(this);
+        simpleEditorStrip.addView(startPad,new LinearLayout.LayoutParams(sidePadding,dp(78)));
+        for(int i=0;i<project.clips.size();i++){
+            final int index=i;
+            Project.Clip clip=project.clips.get(i);
+            if(i>0){
+                TextView join=text("◇",19,PURPLE,true);
+                join.setGravity(Gravity.CENTER);
+                join.setBackground(panel(0xFF302540,7));
+                join.setOnClickListener(v->{selected=index;simpleTransitionDialog();});
+                simpleEditorStrip.addView(join,
+                    new LinearLayout.LayoutParams(Math.round(simpleGeometry.transitionWidth()),dp(78)));
+            }
+            LinearLayout card=vertical();
+            card.setPadding(dp(2),dp(2),dp(2),dp(2));
+            card.setBackground(stroke(index==selected?0xFF3B2E54:SURFACE,
+                index==selected?PURPLE:0xFF363C4A,5));
+            final int width=Math.round(simpleGeometry.width(index));
+            int count=Math.max(1,Math.min(4,(int)Math.ceil(width/(float)dp(44))));
+            LinearLayout tiles=horizontal();
+            List<ImageView> tileViews=new ArrayList<>();
+            Bitmap fallback=null;
+            try{fallback=thumbnail(clip);}catch(Exception ignored){}
+            for(int tile=0;tile<count;tile++){
+                ImageView frame=new ImageView(this);
+                frame.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                if(fallback!=null)frame.setImageBitmap(fallback);
+                else frame.setBackground(panel(SURFACE_2,3));
+                tiles.addView(frame,new LinearLayout.LayoutParams(0,dp(53),1));
+                tileViews.add(frame);
+            }
+            card.addView(tiles,new LinearLayout.LayoutParams(-1,dp(53)));
+            TextView name=text(time(clip.length())+(clip.image?" ▣":" ▶"),11,WHITE,true);
+            name.setGravity(Gravity.CENTER);name.setSingleLine(true);
+            card.addView(name,new LinearLayout.LayoutParams(-1,dp(22)));
+            simpleEditorStrip.addView(card,new LinearLayout.LayoutParams(width,dp(78)));
+            simpleEditorCards.add(card);
+            card.setOnClickListener(v->simpleEditorScroll.smoothScrollTo(
+                Math.round(simpleGeometry.startX(index)+simpleGeometry.width(index)*.04f),0));
+            if(!clip.image&&count>1)
+                requestSimpleVideoFrames(clip,tileViews,generation);
+        }
+        View endPad=new View(this);
+        simpleEditorStrip.addView(endPad,new LinearLayout.LayoutParams(sidePadding,dp(78)));
+        simpleEditorClipLabel.setText("Clip "+(selected+1)+" / "+project.clips.size());
+        double start=simpleGeometry.clipStart(Math.max(0,Math.min(selected,project.clips.size()-1)));
+        simplePlayheadSeconds=start;
+        simpleEditorScroll.scrollTo(Math.round(simpleGeometry.xAt(start)),0);
+        simpleIgnoreScroll=false;
+        onSimpleTimelineScroll(simpleEditorScroll.getScrollX());
+    }
+    private void requestSimpleVideoFrames(Project.Clip clip,List<ImageView> frames,int generation){
+        final String path=clip.path;
+        final double start=clip.start,end=clip.end;
+        final int rotation=clip.rotationDegrees;
+        final int count=frames.size();
+        fileQueue.execute(()->{
+            MediaMetadataRetriever reader=new MediaMetadataRetriever();
+            try{
+                reader.setDataSource(path);
+                for(int i=0;i<count;i++){
+                    if(generation!=simpleStoryboardGeneration)return;
+                    final int index=i;
+                    String key="simple:"+path+":"+start+":"+end+":"+rotation+":"+index+"/"+count;
+                    Bitmap image=thumbCache.get(key);
+                    if(image==null){
+                        long pos=(long)((start+(end-start)*(index+.5)/count)*1000000);
+                        try{
+                            image=reader.getScaledFrameAtTime(pos,
+                                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,160,96);
+                            if(image!=null&&rotation!=0){
+                                Bitmap spun=PhotoOrientation.rotate(image,rotation);
+                                if(spun!=image)image.recycle();
+                                image=spun;
+                            }
+                            if(image!=null)thumbCache.put(key,image);
+                        }catch(Exception ignored){}
+                    }
+                    final Bitmap bitmap=image;
+                    main.post(()->{
+                        if(simpleEditorDialog!=null&&generation==simpleStoryboardGeneration&&
+                            frames.get(index).getParent()!=null&&bitmap!=null&&!bitmap.isRecycled())
+                            frames.get(index).setImageBitmap(bitmap);
+                    });
+                }
+            }catch(Exception ignored){}
+            finally{try{reader.release();}catch(Exception ignored){}}
+        });
+    }
+    private void onSimpleTimelineScroll(int scrollX){
+        if(simpleIgnoreScroll||simpleEditorDialog==null||simpleGeometry==null||
+            simpleGeometry.size()==0||playing)return;
+        double global=simpleGeometry.timeAt(scrollX);
+        int index=simpleGeometry.clipAt(scrollX);
+        if(index<0)return;
+        boolean changed=selected!=index;
+        selected=index;
+        simplePlayheadSeconds=global;
+        Project.Clip clip=project.clips.get(index);
+        double local=simpleGeometry.localTimeFor(index,global);
+        double source=clip.start+local*clip.speed;
+        simpleEditorClipLabel.setText("Clip "+(index+1)+" / "+project.clips.size()+
+            "   ·   "+time(local)+" / "+time(clip.length()));
+        if(changed){
+            highlightSimpleClip(index);
+            simpleScrubSource=source;
+            showClip(index,false);
+        }else if(!clip.image){
+            simpleScrubSource=source;
+            long now=SystemClock.elapsedRealtime();
+            if(now-simpleLastSeek>=65){
+                simpleLastSeek=now;
+                try{previewVideo.seekTo((int)Math.round(source*1000));}catch(Exception ignored){}
+            }
+        }
+        updatePreviewCaption(findCaptionAt(global));
+    }
+    private void highlightSimpleClip(int index){
+        for(int i=0;i<simpleEditorCards.size();i++)
+            simpleEditorCards.get(i).setBackground(
+                stroke(i==index?0xFF3B2E54:SURFACE,i==index?PURPLE:0xFF363C4A,5));
+    }
+    private void syncSimplePlayback(double time){
+        if(simpleEditorDialog==null||simpleGeometry==null||simpleEditorScroll==null)return;
+        simplePlayheadSeconds=time;
+        int index=simpleGeometry.clipAt(simpleGeometry.xAt(time));
+        if(index>=0&&index<project.clips.size()){
+            if(selected!=index){selected=index;highlightSimpleClip(index);}
+            simpleEditorClipLabel.setText("Clip "+(index+1)+" / "+project.clips.size()+
+                "   ·   "+time(simpleGeometry.localTimeFor(index,time))+
+                " / "+time(simpleGeometry.clipDuration(index)));
+        }
+        simpleIgnoreScroll=true;
+        simpleEditorScroll.scrollTo(Math.round(simpleGeometry.xAt(time)),0);
+        simpleIgnoreScroll=false;
+    }
+    private void splitAtSimplePlayhead(){
+        if(simpleGeometry==null||selected<0||selected>=project.clips.size())return;
+        Project.Clip clip=project.clips.get(selected);
+        if(clip.image){toast("Bei Fotos kannst du die Anzeigedauer ändern.");return;}
+        double local=simpleGeometry.localTimeFor(selected,simplePlayheadSeconds);
+        double source=clip.start+local*clip.speed;
+        if(source<=clip.start+.2||source>=clip.end-.2){
+            toast("Weiße Linie zuerst innerhalb des Clips platzieren.");return;
+        }
+        try{
+            stopPreview();
+            Project.Clip tail=Project.Clip.fromJson(clip.toJson());
+            tail.start=source;tail.transition="cut";clip.end=source;
+            project.clips.add(selected+1,tail);
+            selected++;
+            saveProject();refresh();
+            toast("Clip an der weißen Linie geteilt.");
+        }catch(Exception ex){toast("Clip konnte nicht geteilt werden.");}
+    }
+    private void simpleTransitionDialog(){
+        if(selected<=0||selected>=project.clips.size()){
+            toast("Wähle einen Übergang zwischen zwei Clips.");return;
+        }
+        Project.Clip clip=project.clips.get(selected);
+        String[] names={"Kein Übergang","Überblenden","Auflösen","Wischen links",
+            "Wischen rechts","Schieben links","Zoom"};
+        String[] ids={"cut","fade","dissolve","wipeleft","wiperight","slideleft","zoomin"};
+        int current=0;
+        for(int i=0;i<ids.length;i++)if(ids[i].equals(clip.transition))current=i;
+        new AlertDialog.Builder(this).setTitle("Übergang vor Clip "+(selected+1))
+            .setSingleChoiceItems(names,current,(d,which)->{
+                clip.transition=ids[which];d.dismiss();
+                saveProject();refresh();
+            })
+            .setNegativeButton("Abbrechen",null).show();
+    }
+    private void deleteSimpleClip(){
+        if(project.clips.isEmpty())return;
+        new AlertDialog.Builder(this).setTitle("Clip entfernen?")
+            .setMessage("Der Clip wird nur aus deinem Film entfernt. Das Original bleibt auf dem Smartphone.")
+            .setPositiveButton("Entfernen",(d,w)->{
+                stopPreview();
+                project.clips.remove(selected);
+                selected=Math.max(0,Math.min(selected,project.clips.size()-1));
+                saveProject();refresh();
+            }).setNegativeButton("Abbrechen",null).show();
+    }
     private void showFullscreen(){
         if(fullscreenDialog!=null)return;
         if(previewContainer==null)return;

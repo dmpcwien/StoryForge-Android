@@ -94,6 +94,7 @@ public final class MainActivity extends Activity {
     private boolean historyRestoring=false;
     private Uri latestExport;
     private boolean playing=false,previewPaused=false;
+    private boolean previewOnlySelected=false;
     private boolean effectPreviewActive=false,effectPreviewPaused=false;
     private File effectPreviewFile;
     private long pausedClipElapsedMs=0;
@@ -199,7 +200,7 @@ public final class MainActivity extends Activity {
         previewContainer.getLayoutParams().height=(int)(getResources().getDisplayMetrics().widthPixels*.62f)-dp(18);
 
         LinearLayout transport=horizontal();transport.setPadding(0,dp(10),0,dp(8));
-        playButton=button("▶ Film abspielen",0xFF3C325D,this::togglePreview);
+        playButton=button("▶ Clip abspielen",0xFF3C325D,this::togglePreview);
         transport.addView(playButton,new LinearLayout.LayoutParams(0,dp(43),1));
         stopButton=button("■ Stop",SURFACE_2,this::stopPreviewAndShowSelected);
         LinearLayout.LayoutParams stopParams=lp(76,43);stopParams.leftMargin=dp(5);
@@ -211,6 +212,8 @@ public final class MainActivity extends Activity {
         totalLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP,10);
         transport.addView(totalLabel,lp(67,43));
         screen.addView(transport);
+        TextView wholeFilm=pill("▶ Ganzen Film abspielen",SURFACE_2,this::playWholeFilm);
+        screen.addView(wholeFilm,margin(-1,-2,7));
         LinearLayout tools=horizontal();
         tools.addView(pill("◉ Effektvorschau",SURFACE,this::renderEffectPreview),new LinearLayout.LayoutParams(0,-2,1));
         TextView status=pill("▤ Exportstatus",SURFACE,this::showExportStatus);
@@ -220,7 +223,7 @@ public final class MainActivity extends Activity {
         LinearLayout header=horizontal();TextView tl=text("ZEITLEISTE",11,CYAN,true);tl.setLetterSpacing(.12f);
         header.addView(tl,new LinearLayout.LayoutParams(0,-2,1));
         screen.addView(header,margin(-1,-2,5));
-        screen.addView(text("1,5 s halten = verschieben (Vibration) · Wischen = scrollen",
+        screen.addView(text("0,5 s halten = verschieben (Vibration) · Wischen = scrollen",
             11,MUTED,false),margin(-1,-2,10));
         HorizontalScrollView timelineScroll=new HorizontalScrollView(this);timelineScroller=timelineScroll;timelineScroll.setHorizontalScrollBarEnabled(false);
         timeline=horizontal();timeline.setPadding(0,dp(9),dp(12),dp(9));timelineScroll.addView(timeline);
@@ -415,7 +418,7 @@ public final class MainActivity extends Activity {
                                 v.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
                             }
                         };
-                        v.postDelayed(pendingDrag[0],1500L);
+                        v.postDelayed(pendingDrag[0],500L);
                         return false; // Android still handles single taps/click accessibility.
                     case MotionEvent.ACTION_MOVE:
                         if(!dragging[0]&&Math.hypot(event.getX()-touchStart[0],
@@ -1746,7 +1749,9 @@ public final class MainActivity extends Activity {
     private void refreshPreviewButtons(){
         String state=effectPreviewActive
             ?(effectPreviewPaused?"▶ Fortsetzen":"❚❚ Pause")
-            :!playing?"▶ Abspielen":previewPaused?"▶ Fortsetzen":"❚❚ Pause";
+            :!playing?(project.clips.isEmpty()?"▶ Clip":project.clips.get(Math.max(0,
+                Math.min(selected,project.clips.size()-1))).image?"▶ Film":"▶ Clip")
+                :previewPaused?"▶ Fortsetzen":"❚❚ Pause";
         if(playButton!=null)playButton.setText(state);
         if(fullscreenPauseButton!=null)fullscreenPauseButton.setText(state);
     }
@@ -1754,6 +1759,10 @@ public final class MainActivity extends Activity {
         if(playing || effectPreviewActive || fullscreenDialog!=null){
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+    private void playWholeFilm(){
+        if(playing||effectPreviewActive)stopPreview();
+        startPreview(false);
     }
     private void togglePreview(){
         if(effectPreviewActive){
@@ -1767,8 +1776,19 @@ public final class MainActivity extends Activity {
             else pausePreview();
             return;
         }
+        // The main play button previews only the selected video, not the full film.
+        startPreview(!project.clips.get(Math.max(0,
+            Math.min(selected,project.clips.size()-1))).image);
+    }
+    private void startPreview(boolean selectedOnly){
+        if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}
         playing=true;previewPaused=false;
-        previewIndex=0;previewElapsedOffsetMs=0;pausedClipElapsedMs=0;
+        previewOnlySelected=selectedOnly;
+        previewIndex=selectedOnly?Math.max(0,Math.min(selected,project.clips.size()-1)):0;
+        previewElapsedOffsetMs=0;
+        if(selectedOnly)for(int i=0;i<previewIndex;i++)
+            previewElapsedOffsetMs+=(long)(project.clips.get(i).length()*1000);
+        pausedClipElapsedMs=0;
         keepScreenAwake();refreshPreviewButtons();
         beginClipPreview();
         if(!TextUtils.isEmpty(project.musicPath)){
@@ -1786,9 +1806,12 @@ public final class MainActivity extends Activity {
             long elapsed=SystemClock.elapsedRealtime()-previewStartedAt;
             double global=previewElapsedOffsetMs/1000.0+elapsed/1000.0;
             updatePreviewCaption(findCaptionAt(global));
-            totalLabel.setText(time(global)+" / "+time(project.duration()));
+            totalLabel.setText(previewOnlySelected?
+                time(Math.min(c.length(),elapsed/1000.0))+" / "+time(c.length()):
+                time(global)+" / "+time(project.duration()));
             syncPlaylistPreview(global);
             if(elapsed>=c.length()*1000){
+                if(previewOnlySelected){stopPreviewAndShowSelected();return;}
                 previewElapsedOffsetMs+=(long)(c.length()*1000);
                 previewIndex++;
                 if(previewIndex>=project.clips.size()){stopPreviewAndShowSelected();return;}
@@ -1915,6 +1938,7 @@ public final class MainActivity extends Activity {
     private void releaseMusicPreview(){if(musicPreview!=null){try{musicPreview.release();}catch(Exception ignored){}musicPreview=null;}}
     private void stopPreview(){
         playing=false;previewPaused=false;pausedClipElapsedMs=0;
+        previewOnlySelected=false;
         effectPreviewActive=false;effectPreviewPaused=false;effectPreviewFile=null;
         if(playbackTick!=null)main.removeCallbacks(playbackTick);
         if(previewVideo!=null){try{previewVideo.stopPlayback();}catch(Exception ignored){}}

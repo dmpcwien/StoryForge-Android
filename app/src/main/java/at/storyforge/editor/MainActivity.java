@@ -2076,7 +2076,12 @@ public final class MainActivity extends Activity {
         header.addView(button("💾",SURFACE_2,()->{saveProject();toast("Bearbeitung gespeichert.");}),
             lp(49,42));
         root.addView(header,margin(-1,-2,8));
-        root.addView(previewContainer,new LinearLayout.LayoutParams(-1,0,1f));
+        // Keep the preview compact: the old weight=1 stretched a landscape
+        // video into a huge black area on a portrait phone.
+        int availableWidth=getResources().getDisplayMetrics().widthPixels-dp(20);
+        int previewHeight=Math.min(dp(255),Math.max(dp(170),
+            (int)Math.round(availableWidth*9.0/16.0)));
+        root.addView(previewContainer,new LinearLayout.LayoutParams(-1,previewHeight));
 
         LinearLayout playback=horizontal();
         simpleEditorPlayButton=button("▶ Clip",0xFF49356E,()->{
@@ -2101,11 +2106,11 @@ public final class MainActivity extends Activity {
         stripHolder.addView(simpleEditorScroll,new FrameLayout.LayoutParams(-1,-1));
         View playhead=new View(this);
         playhead.setBackground(panel(WHITE,2));
-        FrameLayout.LayoutParams marker=new FrameLayout.LayoutParams(dp(3),dp(82),Gravity.CENTER);
+        FrameLayout.LayoutParams marker=new FrameLayout.LayoutParams(dp(4),dp(118),Gravity.CENTER);
         stripHolder.addView(playhead,marker);
-        root.addView(stripHolder,margin(-1,92,6));
-        root.addView(text("Zeitleiste wischen · Clip antippen · weiße Linie = aktuelle Stelle",
-            11,MUTED,false),margin(-1,-2,11));
+        root.addView(stripHolder,margin(-1,132,7));
+        root.addView(text("Mit dem Finger wischen, um die Stelle im Video zu sehen · weiße Linie = Schnittposition",
+            12,WHITE,false),margin(-1,-2,11));
 
         HorizontalScrollView toolsScroll=new HorizontalScrollView(this);
         toolsScroll.setHorizontalScrollBarEnabled(false);
@@ -2169,11 +2174,13 @@ public final class MainActivity extends Activity {
             simpleEditorClipLabel.setText("Noch keine Clips");
             return;
         }
+        // Longer clips get a longer, legible filmstrip instead of one
+        // tiny 172dp card for a 20-second video.
         simpleGeometry=new SimpleTimelineGeometry(project.clips,
-            dp(70),dp(12),dp(172),dp(30));
+            dp(130),dp(24),dp(620),dp(32));
         int sidePadding=simpleEditorScroll.getWidth()/2;
         View startPad=new View(this);
-        simpleEditorStrip.addView(startPad,new LinearLayout.LayoutParams(sidePadding,dp(78)));
+        simpleEditorStrip.addView(startPad,new LinearLayout.LayoutParams(sidePadding,dp(116)));
         for(int i=0;i<project.clips.size();i++){
             final int index=i;
             Project.Clip clip=project.clips.get(i);
@@ -2183,14 +2190,14 @@ public final class MainActivity extends Activity {
                 join.setBackground(panel(0xFF302540,7));
                 join.setOnClickListener(v->{selected=index;simpleTransitionDialog();});
                 simpleEditorStrip.addView(join,
-                    new LinearLayout.LayoutParams(Math.round(simpleGeometry.transitionWidth()),dp(78)));
+                    new LinearLayout.LayoutParams(Math.round(simpleGeometry.transitionWidth()),dp(116)));
             }
             LinearLayout card=vertical();
             card.setPadding(dp(2),dp(2),dp(2),dp(2));
             card.setBackground(stroke(index==selected?0xFF3B2E54:SURFACE,
                 index==selected?PURPLE:0xFF363C4A,5));
             final int width=Math.round(simpleGeometry.width(index));
-            int count=Math.max(1,Math.min(4,(int)Math.ceil(width/(float)dp(44))));
+            int count=Math.max(2,Math.min(12,(int)Math.ceil(width/(float)dp(54))));
             LinearLayout tiles=horizontal();
             List<ImageView> tileViews=new ArrayList<>();
             Bitmap fallback=null;
@@ -2200,14 +2207,14 @@ public final class MainActivity extends Activity {
                 frame.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 if(fallback!=null)frame.setImageBitmap(fallback);
                 else frame.setBackground(panel(SURFACE_2,3));
-                tiles.addView(frame,new LinearLayout.LayoutParams(0,dp(53),1));
+                tiles.addView(frame,new LinearLayout.LayoutParams(0,dp(84),1));
                 tileViews.add(frame);
             }
-            card.addView(tiles,new LinearLayout.LayoutParams(-1,dp(53)));
-            TextView name=text(time(clip.length())+(clip.image?" ▣":" ▶"),11,WHITE,true);
+            card.addView(tiles,new LinearLayout.LayoutParams(-1,dp(84)));
+            TextView name=text(time(clip.length())+(clip.image?"  FOTO":"  VIDEO"),12,WHITE,true);
             name.setGravity(Gravity.CENTER);name.setSingleLine(true);
-            card.addView(name,new LinearLayout.LayoutParams(-1,dp(22)));
-            simpleEditorStrip.addView(card,new LinearLayout.LayoutParams(width,dp(78)));
+            card.addView(name,new LinearLayout.LayoutParams(-1,dp(26)));
+            simpleEditorStrip.addView(card,new LinearLayout.LayoutParams(width,dp(116)));
             simpleEditorCards.add(card);
             card.setOnClickListener(v->simpleEditorScroll.smoothScrollTo(
                 Math.round(simpleGeometry.startX(index)+simpleGeometry.width(index)*.04f),0));
@@ -2215,7 +2222,7 @@ public final class MainActivity extends Activity {
                 requestSimpleVideoFrames(clip,tileViews,generation);
         }
         View endPad=new View(this);
-        simpleEditorStrip.addView(endPad,new LinearLayout.LayoutParams(sidePadding,dp(78)));
+        simpleEditorStrip.addView(endPad,new LinearLayout.LayoutParams(sidePadding,dp(116)));
         simpleEditorClipLabel.setText("Clip "+(selected+1)+" / "+project.clips.size());
         double start=simpleGeometry.clipStart(Math.max(0,Math.min(selected,project.clips.size()-1)));
         simplePlayheadSeconds=start;

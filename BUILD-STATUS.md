@@ -1,2 +1,2 @@
 StoryForge APK Build: cancelled
-Run: https://github.com/dmpcwien/StoryForge-Android/actions/runs/42509575610
+Run: https://github.com/dmpcwien/StoryForge-Android/actions/runs/42509640702

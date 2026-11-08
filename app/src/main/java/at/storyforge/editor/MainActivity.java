@@ -107,6 +107,16 @@ public final class MainActivity extends Activity {
     private long previewStartedAt=0;
     private long previewElapsedOffsetMs=0;
     private Runnable playbackTick;
+    private CrashAutosave crashAutosave;
+    private Project startupCrashRecovery;
+    private boolean crashAutosaveStarted=false;
+    private final Runnable autosaveTick=new Runnable(){
+        @Override public void run(){
+            if(!crashAutosaveStarted||isFinishing())return;
+            captureCrashSnapshot();
+            main.postDelayed(this,5000L);
+        }
+    };
 
     @Override public void onCreate(Bundle b){
         super.onCreate(b);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
@@ -117,8 +127,18 @@ public final class MainActivity extends Activity {
             try{activeProjectName=projectLibrary.entry(activeProjectId).name;}
             catch(Exception ex){activeProjectId="";activeProjectName="";}
         }
+        crashAutosave=new CrashAutosave(getFilesDir());
         loadProject();exporter=new ExportEngine(this);previewRenderer=new ExportEngine(this);
+        startupCrashRecovery=CrashAutosave.newerRecovery(getFilesDir(),projectFile());
+        if(startupCrashRecovery!=null){
+            try{
+                if(startupCrashRecovery.toJson().toString().equals(project.toJson().toString()))
+                    startupCrashRecovery=null;
+            }catch(Exception ignored){}
+        }
         buildUi();refresh();
+        if(startupCrashRecovery!=null)main.post(this::offerCrashRecovery);
+        else beginCrashAutosave();
         if(android.os.Build.VERSION.SDK_INT>=33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},101);
     }
@@ -1844,7 +1864,9 @@ public final class MainActivity extends Activity {
         activeProjectId=id==null?"":id;
         activeProjectName=name==null?"":name;
         getPreferences(MODE_PRIVATE).edit().putString("active_project_id",activeProjectId).apply();
-        thumbCache.evictAll();selected=0;refresh();
+        thumbCache.evictAll();selected=0;
+        captureCrashSnapshot();
+        refresh();
     }
     private void saveNamedSnapshotOnly()throws Exception{
         if(!activeProjectId.isEmpty())
@@ -2128,6 +2150,58 @@ public final class MainActivity extends Activity {
             blockingOperation.dismiss();blockingOperation=null;blockingStatus=null;
         }
     }
+    /** Prompt before replacing a working copy. Neither choice deletes recovery files. */
+    private void offerCrashRecovery(){
+        final Project recovered=startupCrashRecovery;
+        if(recovered==null){beginCrashAutosave();return;}
+        new AlertDialog.Builder(this)
+            .setTitle("Automatisch gesicherten Film gefunden")
+            .setMessage("StoryForge hat einen neueren Notfall-Speicherstand mit "+
+                recovered.clips.size()+" Clips gefunden. Möchtest du damit weiterarbeiten? "+
+                "Der bisherige Film wird vor der Wiederherstellung separat gesichert.")
+            .setPositiveButton("Film wiederherstellen",(dialog,which)->{
+                try{
+                    if(!project.clips.isEmpty()){
+                        String date=new java.text.SimpleDateFormat("dd.MM.yyyy HH:mm",Locale.GERMANY)
+                            .format(new java.util.Date());
+                        projectLibrary.save(null,"Arbeitsstand vor Wiederherstellung "+date,project);
+                    }
+                    project=recovered;
+                    selected=0;
+                    stopPreview();
+                    saveProject();
+                    refresh();
+                    toast("Film aus Notfallsicherung wiederhergestellt.");
+                }catch(Exception ex){
+                    android.util.Log.e("StoryForge","Notfall-Wiederherstellung",ex);
+                    toast("Wiederherstellung fehlgeschlagen: "+ex.getMessage());
+                }finally{
+                    startupCrashRecovery=null;
+                    beginCrashAutosave();
+                }
+            })
+            .setNegativeButton("Aktuellen Film behalten",(dialog,which)->{
+                startupCrashRecovery=null;
+                beginCrashAutosave();
+            })
+            .setCancelable(false).show();
+    }
+    private void captureCrashSnapshot(){
+        if(crashAutosave==null||!crashAutosaveStarted)return;
+        try{crashAutosave.capture(project);}catch(Exception ex){
+            android.util.Log.e("StoryForge","Periodische Projektsicherung",ex);
+        }
+    }
+    private void beginCrashAutosave(){
+        if(crashAutosave==null)return;
+        if(!crashAutosaveStarted){
+            crashAutosaveStarted=true;
+            crashAutosave.installCrashHandler();
+        }
+        captureCrashSnapshot();
+        main.removeCallbacks(autosaveTick);
+        main.postDelayed(autosaveTick,5000L);
+    }
     private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_SHORT).show();}
     private File projectFile(){return new File(getFilesDir(),"project.json");}
     private synchronized void saveProject(){
@@ -2135,6 +2209,7 @@ public final class MainActivity extends Activity {
             byte[] data=project.toJson().toString(2).getBytes(StandardCharsets.UTF_8);
             ProjectHistory.saveSnapshot(getFilesDir(),projectFile(),data);
             ProjectHistory.atomicWrite(projectFile(),data);
+            if(crashAutosaveStarted&&crashAutosave!=null)crashAutosave.capture(data);
             saveNamedSnapshotOnly();
         }catch(Exception ex){android.util.Log.e("StoryForge","Projekt speichern",ex);}
     }
@@ -2157,6 +2232,22 @@ public final class MainActivity extends Activity {
         }
         if(loaded!=null)project=loaded;
     }
-    @Override protected void onPause(){saveProject();super.onPause();stopPreview();}
-    @Override protected void onDestroy(){stopPreview();fileQueue.shutdown();super.onDestroy();}
+    @Override protected void onResume(){
+        super.onResume();
+        if(crashAutosaveStarted){
+            main.removeCallbacks(autosaveTick);
+            main.postDelayed(autosaveTick,5000L);
+        }
+    }
+    @Override protected void onPause(){
+        if(startupCrashRecovery==null)saveProject();
+        main.removeCallbacks(autosaveTick);
+        super.onPause();
+        stopPreview();
+    }
+    @Override protected void onDestroy(){
+        main.removeCallbacks(autosaveTick);
+        if(crashAutosave!=null)crashAutosave.close();
+        stopPreview();fileQueue.shutdown();super.onDestroy();
+    }
 }

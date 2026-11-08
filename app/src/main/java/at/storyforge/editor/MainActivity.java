@@ -107,6 +107,16 @@ public final class MainActivity extends Activity {
     private long previewStartedAt=0;
     private long previewElapsedOffsetMs=0;
     private Runnable playbackTick;
+    private Dialog simpleEditorDialog;
+    private HorizontalScrollView simpleEditorScroll;
+    private LinearLayout simpleEditorStrip;
+    private SimpleTimelineGeometry simpleGeometry;
+    private TextView simpleEditorClipLabel,simpleEditorPlayButton;
+    private final List<View> simpleEditorCards=new ArrayList<>();
+    private boolean simpleIgnoreScroll=false;
+    private double simplePlayheadSeconds=0,simpleScrubSource=-1;
+    private long simpleLastSeek=0;
+    private int simpleStoryboardGeneration=0;
     private CrashAutosave crashAutosave;
     private Project startupCrashRecovery;
     private boolean crashAutosaveStarted=false;
@@ -199,7 +209,9 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams exParams=new LinearLayout.LayoutParams(0,-2,1);
         exParams.leftMargin=dp(6);recoveryRow.addView(externalBackup,exParams);
         screen.addView(recoveryRow,margin(-1,-2,6));
-        addSpacer(screen,10);
+        TextView easyEditor=button("✂  EINFACH BEARBEITEN",0xFF6841BB,this::openSimpleEditor);
+        screen.addView(easyEditor,margin(-1,46,5));
+        addSpacer(screen,8);
 
         previewContainer=new FrameLayout(this);previewContainer.setBackground(panel(Color.BLACK,18));
         previewContainer.setClipToOutline(true);
@@ -519,6 +531,7 @@ public final class MainActivity extends Activity {
             }
         }
         if(!playing)showSelected();
+        if(simpleEditorDialog!=null)main.post(this::rebuildSimpleEditorTimeline);
     }
     private Bitmap thumbnail(Project.Clip c){
         String key=c.path+":"+c.start+":"+c.rotationDegrees;
@@ -597,6 +610,7 @@ public final class MainActivity extends Activity {
         previewText.setLayoutParams(params);
     }
     private void showSelected(){
+        simpleScrubSource=-1;
         updatePreviewCaption(null);
         if(project.clips.isEmpty()){
             previewImage.setImageDrawable(null);previewImage.setVisibility(View.VISIBLE);previewVideo.setVisibility(View.GONE);
@@ -638,7 +652,9 @@ public final class MainActivity extends Activity {
                 try{mp.setVolume((float)project.originalVolume,(float)project.originalVolume);
                     long offset=playing?(previewPaused?pausedClipElapsedMs:
                         Math.max(0,SystemClock.elapsedRealtime()-previewStartedAt)):0;
-                    long seek=(long)((c.start+Math.min(c.length(),offset/1000.0)*c.speed)*1000);
+                    double source=(!playing&&simpleScrubSource>=0)?simpleScrubSource:
+                        c.start+Math.min(c.length(),offset/1000.0)*c.speed;
+                    long seek=(long)(source*1000);
                     previewVideo.seekTo((int)Math.min(Integer.MAX_VALUE,seek));
                     if(autoPlay&&playing&&!previewPaused)previewVideo.start();}catch(Exception ignored){}
             });
@@ -1927,6 +1943,8 @@ public final class MainActivity extends Activity {
                 :previewPaused?"▶ Fortsetzen":"❚❚ Pause";
         if(playButton!=null)playButton.setText(state);
         if(fullscreenPauseButton!=null)fullscreenPauseButton.setText(state);
+        if(simpleEditorPlayButton!=null)simpleEditorPlayButton.setText(
+            playing?(previewPaused?"▶ Fortsetzen":"❚❚ Pause"):"▶ Clip");
     }
     private void keepScreenAwake(){
         if(playing || effectPreviewActive || fullscreenDialog!=null){
@@ -1956,6 +1974,7 @@ public final class MainActivity extends Activity {
     private void startPreview(boolean selectedOnly){
         if(project.clips.isEmpty()){toast("Bitte zuerst Medien hinzufügen.");return;}
         playing=true;previewPaused=false;
+        simpleScrubSource=-1;
         previewOnlySelected=selectedOnly;
         previewIndex=selectedOnly?Math.max(0,Math.min(selected,project.clips.size()-1)):0;
         previewElapsedOffsetMs=0;
@@ -1983,6 +2002,7 @@ public final class MainActivity extends Activity {
                 time(Math.min(c.length(),elapsed/1000.0))+" / "+time(c.length()):
                 time(global)+" / "+time(project.duration()));
             syncPlaylistPreview(global);
+            syncSimplePlayback(global);
             if(elapsed>=c.length()*1000){
                 if(previewOnlySelected){stopPreviewAndShowSelected();return;}
                 previewElapsedOffsetMs+=(long)(c.length()*1000);
@@ -2111,6 +2131,7 @@ public final class MainActivity extends Activity {
     private void releaseMusicPreview(){if(musicPreview!=null){try{musicPreview.release();}catch(Exception ignored){}musicPreview=null;}}
     private void stopPreview(){
         playing=false;previewPaused=false;pausedClipElapsedMs=0;
+        simpleScrubSource=-1;
         previewOnlySelected=false;
         effectPreviewActive=false;effectPreviewPaused=false;effectPreviewFile=null;
         if(playbackTick!=null)main.removeCallbacks(playbackTick);

@@ -124,6 +124,13 @@ public final class MainActivity extends Activity {
     private boolean simplePreviewFill=false;
     private float simpleZoom=1f;
     private Runnable simpleStillPending;
+    private FrameLayout simpleStripHolder;
+    private View simplePlayhead;
+    private HorizontalScrollView simpleToolBar;
+    private LinearLayout simpleTrimActions;
+    private TextView simpleTrimInfo;
+    private TrimFilmstripView simpleTrimView;
+    private int simpleTrimGeneration=0;
     private long previewInitialOffsetMs=0;
     private CrashAutosave crashAutosave;
     private Project startupCrashRecovery;
@@ -2206,6 +2213,7 @@ public final class MainActivity extends Activity {
         }),lp(38,34));
         root.addView(timeRow,margin(-1,-2,7));
         FrameLayout stripHolder=new FrameLayout(this);
+        simpleStripHolder=stripHolder;
         stripHolder.setBackground(panel(SURFACE,9));
         simpleEditorScroll=new HorizontalScrollView(this);
         simpleEditorScroll.setHorizontalScrollBarEnabled(false);
@@ -2214,6 +2222,7 @@ public final class MainActivity extends Activity {
         simpleEditorScroll.addView(simpleEditorStrip);
         stripHolder.addView(simpleEditorScroll,new FrameLayout.LayoutParams(-1,-1));
         View playhead=new View(this);
+        simplePlayhead=playhead;
         playhead.setBackground(panel(WHITE,2));
         FrameLayout.LayoutParams marker=new FrameLayout.LayoutParams(dp(3),dp(84),Gravity.CENTER);
         stripHolder.addView(playhead,marker);
@@ -2222,13 +2231,11 @@ public final class MainActivity extends Activity {
             11,MUTED,false),margin(-1,-2,8));
 
         HorizontalScrollView toolsScroll=new HorizontalScrollView(this);
+        simpleToolBar=toolsScroll;
         toolsScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout tools=horizontal();
         tools.setPadding(dp(2),0,dp(6),0);
-        addSimpleAction(tools,"✂ Schneiden",()->{
-            if(project.clips.isEmpty())return;
-            stopPreview();clipTimingDialog(project.clips.get(selected));
-        });
+        addSimpleAction(tools,"✂ Schneiden",this::beginSimpleInlineTrim);
         addSimpleAction(tools,"╱ Teilen",this::splitAtSimplePlayhead);
         addSimpleAction(tools,"◇ Übergang",this::simpleTransitionDialog);
         addSimpleAction(tools,"T Text",this::addCaption);
@@ -2236,9 +2243,24 @@ public final class MainActivity extends Activity {
         addSimpleAction(tools,"⌫ Löschen",this::deleteSimpleClip);
         toolsScroll.addView(tools);
         root.addView(toolsScroll,margin(-1,48,8));
+        simpleTrimActions=vertical();
+        simpleTrimInfo=text("",12,CYAN,true);
+        simpleTrimInfo.setGravity(Gravity.CENTER);
+        simpleTrimActions.addView(simpleTrimInfo,margin(-1,-2,6));
+        LinearLayout trimButtons=horizontal();
+        trimButtons.addView(button("Abbrechen",SURFACE_2,()->endSimpleInlineTrim()),
+            new LinearLayout.LayoutParams(0,dp(44),1));
+        TextView apply=button("✓ Schnitt übernehmen",0xFF6744B7,this::applySimpleInlineTrim);
+        LinearLayout.LayoutParams applyP=new LinearLayout.LayoutParams(0,dp(44),2);
+        applyP.leftMargin=dp(6);
+        trimButtons.addView(apply,applyP);
+        simpleTrimActions.addView(trimButtons);
+        simpleTrimActions.setVisibility(View.GONE);
+        root.addView(simpleTrimActions,margin(-1,-2,8));
 
         dialog.setContentView(root);
         dialog.setOnDismissListener(d->{
+            endSimpleInlineTrim();
             simpleStoryboardGeneration++;
             simpleStillGeneration++;
             if(simpleStillPending!=null)main.removeCallbacks(simpleStillPending);
@@ -2248,6 +2270,8 @@ public final class MainActivity extends Activity {
             previewContainer.setLayoutParams(new LinearLayout.LayoutParams(-1,oldHeight));
             screen.addView(previewContainer,Math.min(slot,screen.getChildCount()));
             simpleEditorDialog=null;simpleEditorScroll=null;simpleEditorStrip=null;
+            simpleStripHolder=null;simplePlayhead=null;simpleToolBar=null;
+            simpleTrimActions=null;simpleTrimInfo=null;
             simpleEditorClipLabel=null;simpleEditorPlayButton=null;simpleGeometry=null;
             simpleEditorCards.clear();
             simpleScrubSource=-1;
@@ -2269,6 +2293,90 @@ public final class MainActivity extends Activity {
         });
         simpleEditorScroll.post(this::rebuildSimpleEditorTimeline);
         showSelected();
+    }
+    /**
+     * Single-screen in/out trim. Keep the video preview above, change only
+     * the filmstrip and bottom tools. Nothing is written until Apply.
+     */
+    private void beginSimpleInlineTrim(){
+        if(simpleEditorDialog==null||simpleStripHolder==null||
+            project.clips.isEmpty()||selected>=project.clips.size())return;
+        Project.Clip clip=project.clips.get(selected);
+        if(clip.image){clipTimingDialog(clip);return;}
+        stopPreview();
+        endSimpleInlineTrim();
+        int generation=++simpleTrimGeneration;
+        double duration=Math.max(TrimRange.MIN_SECONDS,clip.sourceDuration);
+        TrimFilmstripView trim=new TrimFilmstripView(this,duration,clip.start,clip.end);
+        trim.setPadding(dp(12),dp(4),dp(12),dp(4));
+        try{trim.setPlaceholder(thumbnail(clip));}catch(Exception ignored){}
+        final int count=10;
+        trim.prepareFrames(count);
+        simpleTrimView=trim;
+        simpleEditorScroll.setVisibility(View.GONE);
+        simplePlayhead.setVisibility(View.GONE);
+        simpleStripHolder.addView(trim,new FrameLayout.LayoutParams(-1,-1));
+        simpleToolBar.setVisibility(View.GONE);
+        simpleTrimActions.setVisibility(View.VISIBLE);
+        Runnable labels=()->{
+            if(simpleTrimInfo!=null)simpleTrimInfo.setText(
+                "Anfang "+time(trim.start())+"  ·  Ende "+time(trim.end())+
+                "  ·  "+time(trim.end()-trim.start())+" behalten");
+        };
+        labels.run();
+        simpleScrubSource=clip.start;
+        displaySimpleScrubFrame(clip,clip.start);
+        trim.setOnTrimChanged((start,end,at)->{
+            labels.run();
+            simpleScrubSource=at;
+            displaySimpleScrubFrame(clip,at);
+        });
+        trimQueue.execute(()->{
+            MediaMetadataRetriever reader=new MediaMetadataRetriever();
+            try{
+                reader.setDataSource(clip.path);
+                int[] order={0,9,4,2,6,1,3,5,7,8};
+                for(int at:order){
+                    if(generation!=simpleTrimGeneration)break;
+                    Bitmap bitmap=null;
+                    try{
+                        bitmap=reader.getScaledFrameAtTime(
+                            (long)(duration*at/(count-1)*1000000L),
+                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,160,100);
+                    }catch(Exception ignored){}
+                    final Bitmap frame=bitmap;
+                    main.post(()->{
+                        if(simpleTrimView==trim&&generation==simpleTrimGeneration)
+                            trim.updateFrame(at,frame);
+                        else if(frame!=null&&!frame.isRecycled())frame.recycle();
+                    });
+                }
+            }catch(Exception ex){android.util.Log.w("StoryForge","Inline-Schnittbilder",ex);}
+            finally{try{reader.release();}catch(Exception ignored){}}
+        });
+    }
+    private void applySimpleInlineTrim(){
+        if(simpleTrimView==null||selected<0||selected>=project.clips.size())return;
+        Project.Clip clip=project.clips.get(selected);
+        double a=simpleTrimView.start(),b=simpleTrimView.end();
+        if(b-a<TrimRange.MIN_SECONDS){toast("Zu kurzer Ausschnitt.");return;}
+        clip.start=a;clip.end=b;
+        simplePlayheadSeconds=0;
+        endSimpleInlineTrim();
+        saveProject();refresh();
+        toast("Schnitt gespeichert · der Rest bleibt im Original erhalten.");
+    }
+    private void endSimpleInlineTrim(){
+        simpleTrimGeneration++;
+        if(simpleTrimView!=null){
+            if(simpleStripHolder!=null)simpleStripHolder.removeView(simpleTrimView);
+            simpleTrimView.release();
+            simpleTrimView=null;
+        }
+        if(simpleEditorScroll!=null)simpleEditorScroll.setVisibility(View.VISIBLE);
+        if(simplePlayhead!=null)simplePlayhead.setVisibility(View.VISIBLE);
+        if(simpleToolBar!=null)simpleToolBar.setVisibility(View.VISIBLE);
+        if(simpleTrimActions!=null)simpleTrimActions.setVisibility(View.GONE);
     }
     private void addSimpleAction(LinearLayout tools,String label,Runnable action){
         TextView button=pill(label,SURFACE_2,action);

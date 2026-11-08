@@ -67,6 +67,8 @@ public final class MainActivity extends Activity {
         SURFACE_2=0xFF292E39,PURPLE=0xFF9A78FF,
         CYAN=0xFF85DCE1, WHITE=0xFFF5F6FA, MUTED=0xFFA4ACB9;
     private final ExecutorService fileQueue=Executors.newSingleThreadExecutor();
+    // Visual thumbnails must not wait for multi-file imports or timeline decoding.
+    private final ExecutorService trimQueue=Executors.newSingleThreadExecutor();
     private final Handler main=new Handler(Looper.getMainLooper());
     private Project project=new Project();
     private ProjectLibrary projectLibrary;
@@ -1283,9 +1285,10 @@ public final class MainActivity extends Activity {
         ImageView still=new ImageView(this);
         still.setScaleType(ImageView.ScaleType.FIT_CENTER);
         still.setBackgroundColor(Color.BLACK);
+        Bitmap firstFrame=null;
         try{
-            Bitmap first=thumbnail(clip);
-            if(first!=null)still.setImageBitmap(first);
+            firstFrame=thumbnail(clip);
+            if(firstFrame!=null)still.setImageBitmap(firstFrame);
         }catch(Exception ignored){}
         previewSurface.addView(still,new FrameLayout.LayoutParams(-1,-1));
         body.addView(previewSurface,lp(-1,190));
@@ -1294,14 +1297,37 @@ public final class MainActivity extends Activity {
         body.addView(text("GANZES VIDEO · links/rechts wischen, violette Griffe ziehen",
             12,WHITE,true),margin(-1,-2,7));
         TrimFilmstripView strip=new TrimFilmstripView(this,duration,choice[0],choice[1]);
-        strip.setPadding(dp(15),dp(4),dp(15),dp(4));
+        strip.setPadding(dp(12),dp(4),dp(12),dp(4));
+        strip.setPlaceholder(firstFrame);
+        final int count=Math.max(9,Math.min(13,(int)(duration/6)+9));
+        strip.prepareFrames(count);
         HorizontalScrollView filmstripScroll=new HorizontalScrollView(this);
-        filmstripScroll.setHorizontalScrollBarEnabled(true);
-        int stripWidth=Math.max(dp(540),Math.min(dp(1600),
-            (int)(duration*dp(29))));
-        filmstripScroll.addView(strip,new android.widget.FrameLayout.LayoutParams(stripWidth,dp(126)));
-        body.addView(filmstripScroll,margin(-1,126,9));
-        body.addView(text("Dunkel = wird entfernt. Die breiten violetten Griffe bestimmen Start und Ende.",
+        filmstripScroll.setHorizontalScrollBarEnabled(false);
+        // The entire source and BOTH handles fit within the phone initially.
+        final int normalWidth=Math.max(dp(245),
+            getResources().getDisplayMetrics().widthPixels-dp(76));
+        final int expandedWidth=Math.max(normalWidth*3,dp(840));
+        final LinearLayout.LayoutParams stripParams=lp(normalWidth,112);
+        filmstripScroll.addView(strip,stripParams);
+        body.addView(filmstripScroll,margin(-1,112,7));
+        TextView zoomStrip=button("＋ Filmstreifen vergrößern",SURFACE_2,()->{});
+        body.addView(zoomStrip,margin(-1,39,8));
+        final boolean[] expanded={false};
+        zoomStrip.setOnClickListener(v->{
+            expanded[0]=!expanded[0];
+            LinearLayout.LayoutParams params=lp(
+                expanded[0]?expandedWidth:normalWidth,112);
+            strip.setLayoutParams(params);
+            zoomStrip.setText(expanded[0]?"− Ganzes Video anzeigen":
+                "＋ Filmstreifen vergrößern");
+            filmstripScroll.post(()->{
+                if(expanded[0]){
+                    int target=(int)(expandedWidth*choice[0]/duration);
+                    filmstripScroll.scrollTo(Math.max(0,target-dp(28)),0);
+                }else filmstripScroll.scrollTo(0,0);
+            });
+        });
+        body.addView(text("Violett = behalten. Griffe ziehen, um Anfang und Ende festzulegen.",
             12,WHITE,false),margin(-1,-2,10));
         TextView selectedDuration=text("",13,CYAN,true);
         body.addView(selectedDuration,margin(-1,-2,8));
@@ -1420,36 +1446,40 @@ public final class MainActivity extends Activity {
         if(trimWindow!=null)trimWindow.setLayout(-1,-2);
         // Attach the video only after the dialog owns its window/surface.
         viewer.setVideoPath(clip.path);
-        filmstripScroll.post(()->{
-            if(!closed[0]){
-                int target=Math.round(stripWidth*(float)(choice[0]/duration));
-                filmstripScroll.scrollTo(Math.max(0,target-dp(35)),0);
-            }
-        });
-        // Extract equally spaced frames from the ENTIRE video outside the UI thread.
-        fileQueue.execute(()->{
-            final int count=Math.max(10,Math.min(22,(int)(duration/3)+10));
-            Bitmap[] thumbs=new Bitmap[count];
+        // Decode independently from the import/timeline queue. Every thumbnail
+        // appears as soon as it is ready; the strip is never a blank placeholder.
+        trimQueue.execute(()->{
             MediaMetadataRetriever retriever=new MediaMetadataRetriever();
             try{
                 retriever.setDataSource(clip.path);
-                for(int i=0;i<count;i++){
+                // First/last/middle first; then fill the gaps in natural order.
+                int[] order=new int[count];
+                int k=0;
+                order[k++]=0;
+                order[k++]=count-1;
+                order[k++]=count/2;
+                for(int i=1;i<count-1;i++)if(i!=count/2)order[k++]=i;
+                for(int idx:order){
                     if(closed[0])break;
-                    long at=(long)(Math.max(0,duration*i/(count-1)-.005)*1000000L);
+                    long at=(long)(Math.max(0,duration*idx/(count-1))*1000000L);
+                    Bitmap bitmap=null;
                     try{
-                        thumbs[i]=retriever.getScaledFrameAtTime(at,
-                            MediaMetadataRetriever.OPTION_CLOSEST,220,135);
+                        bitmap=retriever.getScaledFrameAtTime(at,
+                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,160,100);
                     }catch(Exception ignored){}
+                    final Bitmap image=bitmap;
+                    main.post(()->{
+                        if(!closed[0]){
+                            strip.updateFrame(idx,image);
+                            if(!active[0]){
+                                Bitmap current=strip.frameAt(choice[0]);
+                                if(current!=null)still.setImageBitmap(current);
+                            }
+                        }else if(image!=null&&!image.isRecycled())image.recycle();
+                    });
                 }
-            }catch(Exception ignored){}
+            }catch(Exception ex){android.util.Log.w("StoryForge","Schnittbilder",ex);}
             finally{try{retriever.release();}catch(Exception ignored){}}
-            runOnUiThread(()->{
-                if(!closed[0]){
-                    strip.setThumbnails(thumbs);
-                    Bitmap first=strip.frameAt(choice[0]);
-                    if(first!=null&&!active[0])still.setImageBitmap(first);
-                }else for(Bitmap bm:thumbs)if(bm!=null&&!bm.isRecycled())bm.recycle();
-            });
         });
     }
     private void clipTimingDialog(Project.Clip c){
@@ -2635,6 +2665,7 @@ public final class MainActivity extends Activity {
     @Override protected void onDestroy(){
         if(simpleEditorDialog!=null)try{simpleEditorDialog.dismiss();}catch(Exception ignored){}
         main.removeCallbacks(autosaveTick);
+        trimQueue.shutdown();
         if(crashAutosave!=null)crashAutosave.close();
         stopPreview();fileQueue.shutdown();super.onDestroy();
     }

@@ -117,6 +117,7 @@ public final class MainActivity extends Activity {
     private double simplePlayheadSeconds=0,simpleScrubSource=-1;
     private long simpleLastSeek=0;
     private int simpleStoryboardGeneration=0;
+    private long previewInitialOffsetMs=0;
     private CrashAutosave crashAutosave;
     private Project startupCrashRecovery;
     private boolean crashAutosaveStarted=false;
@@ -1981,6 +1982,12 @@ public final class MainActivity extends Activity {
         if(selectedOnly)for(int i=0;i<previewIndex;i++)
             previewElapsedOffsetMs+=(long)(project.clips.get(i).length()*1000);
         pausedClipElapsedMs=0;
+        previewInitialOffsetMs=0;
+        if(selectedOnly&&simpleEditorDialog!=null&&simpleGeometry!=null){
+            int selectedIndex=Math.max(0,Math.min(previewIndex,simpleGeometry.size()-1));
+            previewInitialOffsetMs=(long)(1000*
+                simpleGeometry.localTimeFor(selectedIndex,simplePlayheadSeconds));
+        }
         keepScreenAwake();refreshPreviewButtons();
         beginClipPreview();
         if(!TextUtils.isEmpty(project.musicPath)){
@@ -2036,8 +2043,10 @@ public final class MainActivity extends Activity {
     }
     private void beginClipPreview(){
         if(previewIndex>=project.clips.size())return;
-        previewStartedAt=SystemClock.elapsedRealtime();
-        pausedClipElapsedMs=0;
+        long offset=previewInitialOffsetMs;
+        previewInitialOffsetMs=0;
+        previewStartedAt=SystemClock.elapsedRealtime()-offset;
+        pausedClipElapsedMs=offset;
         showClip(previewIndex,true);
     }
     /**
@@ -2254,7 +2263,8 @@ public final class MainActivity extends Activity {
     }
     private void onSimpleTimelineScroll(int scrollX){
         if(simpleIgnoreScroll||simpleEditorDialog==null||simpleGeometry==null||
-            simpleGeometry.size()==0||playing)return;
+            simpleGeometry.size()==0)return;
+        if(playing)stopPreview(); // swiping manually takes control of the playhead
         double global=simpleGeometry.timeAt(scrollX);
         int index=simpleGeometry.clipAt(scrollX);
         if(index<0)return;
@@ -2574,6 +2584,7 @@ public final class MainActivity extends Activity {
         stopPreview();
     }
     @Override protected void onDestroy(){
+        if(simpleEditorDialog!=null)try{simpleEditorDialog.dismiss();}catch(Exception ignored){}
         main.removeCallbacks(autosaveTick);
         if(crashAutosave!=null)crashAutosave.close();
         stopPreview();fileQueue.shutdown();super.onDestroy();

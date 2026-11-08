@@ -120,7 +120,7 @@ public final class MainActivity extends Activity {
     private double simplePlayheadSeconds=0,simpleScrubSource=-1;
     private long simpleLastSeek=0;
     private int simpleStoryboardGeneration=0;
-    private int simpleStillGeneration=0;
+    private volatile int simpleStillGeneration=0;
     private boolean simplePreviewFill=false;
     private float simpleZoom=1f;
     private Runnable simpleStillPending;
@@ -654,6 +654,13 @@ public final class MainActivity extends Activity {
             }
             previewImage.setImageBitmap(image);
         }else{
+            if(simpleEditorDialog!=null&&!autoPlay&&!playing){
+                previewVideo.setVisibility(View.GONE);
+                previewImage.setVisibility(View.VISIBLE);
+                displaySimpleScrubFrame(c,
+                    simpleScrubSource>=0?simpleScrubSource:c.start);
+                return;
+            }
             previewImage.setVisibility(View.GONE);previewVideo.setVisibility(View.VISIBLE);
             previewVideo.setRotation(c.rotationDegrees);
             previewVideo.setOnPreparedListener(mp->{
@@ -2233,6 +2240,8 @@ public final class MainActivity extends Activity {
         dialog.setContentView(root);
         dialog.setOnDismissListener(d->{
             simpleStoryboardGeneration++;
+            simpleStillGeneration++;
+            if(simpleStillPending!=null)main.removeCallbacks(simpleStillPending);
             stopPreview();
             ViewGroup parent=(ViewGroup)previewContainer.getParent();
             if(parent!=null)parent.removeView(previewContainer);
@@ -2271,6 +2280,7 @@ public final class MainActivity extends Activity {
             simpleEditorScroll==null||simpleEditorScroll.getWidth()<1)return;
         simpleStoryboardGeneration++;
         final int generation=simpleStoryboardGeneration;
+        double desiredTime=simplePlayheadSeconds;
         simpleIgnoreScroll=true;
         simpleEditorStrip.removeAllViews();simpleEditorCards.clear();
         if(project.clips.isEmpty()){
@@ -2330,8 +2340,10 @@ public final class MainActivity extends Activity {
         simpleEditorStrip.addView(endPad,new LinearLayout.LayoutParams(sidePadding,dp(86)));
         simpleEditorClipLabel.setText("Clip "+(selected+1)+" / "+project.clips.size());
         double start=simpleGeometry.clipStart(Math.max(0,Math.min(selected,project.clips.size()-1)));
-        simplePlayheadSeconds=start;
-        simpleEditorScroll.scrollTo(Math.round(simpleGeometry.xAt(start)),0);
+        double current=Math.max(0,Math.min(simpleGeometry.totalTime(),desiredTime));
+        if(simpleGeometry.clipAt(simpleGeometry.xAt(current))!=selected)current=start;
+        simplePlayheadSeconds=current;
+        simpleEditorScroll.scrollTo(Math.round(simpleGeometry.xAt(current)),0);
         simpleIgnoreScroll=false;
         onSimpleTimelineScroll(simpleEditorScroll.getScrollX());
     }
@@ -2373,6 +2385,69 @@ public final class MainActivity extends Activity {
             finally{try{reader.release();}catch(Exception ignored){}}
         });
     }
+    /**
+     * VideoView often remains black when seeking in a paused portrait video.
+     * Draw an actual decoded video frame in the image layer while scrubbing,
+     * using a separate executor and a debounced request to avoid UI jank.
+     */
+    private void displaySimpleScrubFrame(Project.Clip clip,double sourceSeconds){
+        if(simpleEditorDialog==null||clip==null||clip.image)return;
+        previewImage.setVisibility(View.VISIBLE);
+        previewVideo.setVisibility(View.GONE);
+        final String path=clip.path;
+        final int rotation=clip.rotationDegrees;
+        final long rounded=Math.round(Math.max(0,sourceSeconds)*4);
+        final String key="scrub:"+path+":"+rounded+":"+rotation;
+        Bitmap image=thumbCache.get(key);
+        if(image!=null&&!image.isRecycled()){
+            previewImage.setImageBitmap(image);
+            previewImage.setScaleType(simplePreviewFill?
+                ImageView.ScaleType.CENTER_CROP:ImageView.ScaleType.FIT_CENTER);
+            if(simpleStillPending!=null)main.removeCallbacks(simpleStillPending);
+            simpleStillGeneration++;
+            return;
+        }
+        // Render a visible first frame immediately, rather than a black player.
+        Bitmap fallback=thumbCache.get(clip.path+":"+clip.start+":"+rotation);
+        if(fallback!=null&&!fallback.isRecycled())previewImage.setImageBitmap(fallback);
+        final int generation=++simpleStillGeneration;
+        if(simpleStillPending!=null)main.removeCallbacks(simpleStillPending);
+        simpleStillPending=()->{
+            try{
+                scrubQueue.execute(()->{
+                    if(generation!=simpleStillGeneration)return;
+                    Bitmap frame=null;
+                    MediaMetadataRetriever retriever=new MediaMetadataRetriever();
+                    try{
+                        retriever.setDataSource(path);
+                        frame=retriever.getScaledFrameAtTime(
+                            (long)(Math.max(0,sourceSeconds)*1_000_000L),
+                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,520,680);
+                        if(frame!=null&&rotation!=0){
+                            Bitmap rotated=PhotoOrientation.rotate(frame,rotation);
+                            if(rotated!=frame)frame.recycle();
+                            frame=rotated;
+                        }
+                    }catch(Exception ex){android.util.Log.w("StoryForge","Bildvorschau",ex);}
+                    finally{try{retriever.release();}catch(Exception ignored){}}
+                    final Bitmap ready=frame;
+                    main.post(()->{
+                        if(generation==simpleStillGeneration&&
+                            simpleEditorDialog!=null&&!playing&&
+                            selected<project.clips.size()&&
+                            path.equals(project.clips.get(selected).path)&&
+                            ready!=null&&!ready.isRecycled()){
+                            thumbCache.put(key,ready);
+                            previewImage.setImageBitmap(ready);
+                            previewImage.setScaleType(simplePreviewFill?
+                                ImageView.ScaleType.CENTER_CROP:ImageView.ScaleType.FIT_CENTER);
+                        }else if(ready!=null&&!ready.isRecycled())ready.recycle();
+                    });
+                });
+            }catch(java.util.concurrent.RejectedExecutionException ignored){}
+        };
+        main.postDelayed(simpleStillPending,110L);
+    }
     private void onSimpleTimelineScroll(int scrollX){
         if(simpleIgnoreScroll||simpleEditorDialog==null||simpleGeometry==null||
             simpleGeometry.size()==0)return;
@@ -2388,18 +2463,10 @@ public final class MainActivity extends Activity {
         double source=clip.start+local*clip.speed;
         simpleEditorClipLabel.setText("Clip "+(index+1)+" / "+project.clips.size()+
             "   ·   "+time(local)+" / "+time(clip.length()));
-        if(changed){
-            highlightSimpleClip(index);
-            simpleScrubSource=source;
-            showClip(index,false);
-        }else if(!clip.image){
-            simpleScrubSource=source;
-            long now=SystemClock.elapsedRealtime();
-            if(now-simpleLastSeek>=65){
-                simpleLastSeek=now;
-                try{previewVideo.seekTo((int)Math.round(source*1000));}catch(Exception ignored){}
-            }
-        }
+        if(changed)highlightSimpleClip(index);
+        simpleScrubSource=source;
+        if(changed)showClip(index,false);
+        else if(!clip.image)displaySimpleScrubFrame(clip,source);
         updatePreviewCaption(findCaptionAt(global));
     }
     private void highlightSimpleClip(int index){

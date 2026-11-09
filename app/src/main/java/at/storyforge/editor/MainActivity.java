@@ -1326,7 +1326,10 @@ public final class MainActivity extends Activity {
         final int normalWidth=Math.max(dp(245),
             getResources().getDisplayMetrics().widthPixels-dp(76));
         final int expandedWidth=Math.max(normalWidth*3,dp(840));
-        final LinearLayout.LayoutParams stripParams=lp(normalWidth,112);
+        // HorizontalScrollView extends FrameLayout. Use matching pixel-based
+        // LayoutParams: lp() would multiply this already-pixel width by density.
+        final FrameLayout.LayoutParams stripParams=
+            new FrameLayout.LayoutParams(normalWidth,dp(112));
         filmstripScroll.addView(strip,stripParams);
         body.addView(filmstripScroll,margin(-1,112,7));
         TextView zoomStrip=button("＋ Filmstreifen vergrößern",SURFACE_2,()->{});
@@ -1334,8 +1337,8 @@ public final class MainActivity extends Activity {
         final boolean[] expanded={false};
         zoomStrip.setOnClickListener(v->{
             expanded[0]=!expanded[0];
-            LinearLayout.LayoutParams params=lp(
-                expanded[0]?expandedWidth:normalWidth,112);
+            FrameLayout.LayoutParams params=new FrameLayout.LayoutParams(
+                expanded[0]?expandedWidth:normalWidth,dp(112));
             strip.setLayoutParams(params);
             zoomStrip.setText(expanded[0]?"− Ganzes Video anzeigen":
                 "＋ Filmstreifen vergrößern");
